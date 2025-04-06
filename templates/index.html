@@ -42,9 +42,26 @@
         .detection-item.new {
             background-color: #f8f9fa;
         }
+        #connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+        .connected {
+            background-color: #28a745;
+            color: white;
+        }
+        .disconnected {
+            background-color: #dc3545;
+            color: white;
+        }
     </style>
 </head>
 <body>
+    <div id="connection-status" class="disconnected">Disconnected</div>
     <div class="container">
         <h1 class="mb-4">Food Detection System</h1>
         <button id="toggle-stream" class="btn btn-primary">Start Detection</button>
@@ -62,9 +79,44 @@
     </div>
 
     <script>
-        var socket = io.connect('http://' + document.domain + ':' + location.port);
+        // Initialize Socket.IO with explicit configuration
+        var socket = io.connect('http://' + document.domain + ':5001', {
+            transports: ['websocket'],
+            upgrade: false,
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: Infinity
+        });
+
+        console.log('Attempting to connect to server...');
+
         var isStreaming = false;
         var lastDetectedItems = {};
+        const connectionStatus = document.getElementById('connection-status');
+
+        // Socket connection status logging
+        socket.on('connect', function() {
+            console.log('Connected to server successfully');
+            connectionStatus.textContent = 'Connected';
+            connectionStatus.className = 'connected';
+        });
+
+        socket.on('disconnect', function() {
+            console.log('Disconnected from server');
+            connectionStatus.textContent = 'Disconnected';
+            connectionStatus.className = 'disconnected';
+        });
+
+        socket.on('connect_error', function(error) {
+            console.error('Connection error:', error);
+            connectionStatus.textContent = 'Connection Error';
+            connectionStatus.className = 'disconnected';
+        });
+
+        socket.on('error', function(error) {
+            console.error('Socket error:', error);
+        });
 
         document.getElementById("toggle-stream").addEventListener("click", function() {
             if (isStreaming) {
@@ -74,8 +126,14 @@
             }
         });
 
-        socket.on('update_price', function(data) {
-            updateDetectionLog(data.items);
+        socket.on('detection_update', function(data) {
+            console.log('Received detection update:', data);
+            if (data && data.items) {
+                console.log('Updating detection log with items:', data.items);
+                updateDetectionLog(data.items);
+            } else {
+                console.log('No items in detection update');
+            }
         });
 
         function startStream() {
@@ -93,13 +151,15 @@
         }
 
         function updateDetectionLog(items) {
+            console.log('updateDetectionLog called with items:', items);
             const detectionList = document.getElementById("detection-list");
             const timestamp = new Date().toLocaleTimeString();
             
-            // Add new detections
+            // Only add new detections, don't clear the list
             for (const [item, count] of Object.entries(items)) {
-                // Check if this is a new detection
+                // Check if this is a new detection or different count
                 if (!lastDetectedItems[item] || lastDetectedItems[item] !== count) {
+                    console.log('Adding detection item:', item, count);
                     const detectionItem = document.createElement("div");
                     detectionItem.className = "detection-item new";
                     detectionItem.innerHTML = `
@@ -118,8 +178,8 @@
             // Update last detected items
             lastDetectedItems = {...items};
             
-            // Keep only the last 50 detections
-            while (detectionList.children.length > 50) {
+            // Keep only the last 20 detections
+            while (detectionList.children.length > 20) {
                 detectionList.removeChild(detectionList.lastChild);
             }
         }
