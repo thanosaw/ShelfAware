@@ -1,27 +1,7 @@
-# ShelfAware - Real-time Food Detection and Pricing System
+# ShelfAware - Real-time Food Detection System
 
-A Flask-based web application that uses computer vision to detect food items and display their prices in real-time.
+A Flask-based web application that uses computer vision to detect food items in real time
 
-## Features
-
-- Real-time food detection using YOLOv8
-- Live camera feed integration
-- Automatic price calculation
-- Support for multiple food items
-- User-friendly web interface
-
-## Supported Food Items and Prices
-
-- Banana: $5
-- Black Beans: $4
-- Grilled Chicken Breast: $7
-- Milk: $2
-- Orange Juice: $3
-- Pizza: $8
-- Potato: $3
-- Salad: $5
-- Spaghetti: $10
-- White Rice: $5
 
 ## Prerequisites
 
