@@ -58,6 +58,25 @@
             background-color: #dc3545;
             color: white;
         }
+        .screenshot-gallery {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .screenshot-item {
+            margin: 10px;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 5px;
+            text-align: center;
+            max-width: 200px;
+        }
+        .screenshot-item img {
+            width: 100%;
+            height: auto;
+            border-radius: 3px;
+        }
     </style>
 </head>
 <body>
@@ -67,6 +86,14 @@
         <button id="toggle-stream" class="btn btn-primary">Start Detection</button>
         <div>
             <img id="video-feed" src="" style="display: none;">
+        </div>
+
+        <!-- Screenshot Gallery -->
+        <div class="screenshot-gallery mt-4">
+            <h3>Detection Screenshots</h3>
+            <div id="screenshot-container" class="d-flex flex-wrap justify-content-center">
+                <!-- Screenshots will be added here -->
+            </div>
         </div>
 
         <!-- Detection Log -->
@@ -133,6 +160,35 @@
                 updateDetectionLog(data.items);
             } else {
                 console.log('No items in detection update');
+            }
+        });
+
+        socket.on('detection_screenshot', function(data) {
+            const screenshotContainer = document.getElementById('screenshot-container');
+            
+            // Create screenshot element
+            const screenshotItem = document.createElement('div');
+            screenshotItem.className = 'screenshot-item';
+            
+            // Create and set up the image
+            const img = document.createElement('img');
+            img.src = `data:image/jpeg;base64,${data.image}`;
+            
+            // Create caption
+            const caption = document.createElement('p');
+            caption.className = 'mt-2 mb-0';
+            caption.textContent = `${data.class_name} (ID: ${data.track_id})`;
+            
+            // Add elements to container
+            screenshotItem.appendChild(img);
+            screenshotItem.appendChild(caption);
+            
+            // Add to the beginning of the container
+            screenshotContainer.insertBefore(screenshotItem, screenshotContainer.firstChild);
+            
+            // Keep only the last 10 screenshots
+            while (screenshotContainer.children.length > 10) {
+                screenshotContainer.removeChild(screenshotContainer.lastChild);
             }
         });
 

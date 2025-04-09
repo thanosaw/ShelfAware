@@ -4,9 +4,11 @@ import cv2
 from ultralytics import YOLO
 import time
 import logging
+import numpy as np
+import base64
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -27,6 +29,34 @@ menu = {
     'white rice': 5
 }
 
+# Global variable for the camera
+camera = cv2.VideoCapture(0)
+
+def encode_frame_to_base64(frame):
+    """Convert an OpenCV frame to base64 string with compression"""
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 70]  # 70% quality
+    _, buffer = cv2.imencode('.jpg', frame, encode_param)
+    return base64.b64encode(buffer).decode('utf-8')
+
+def capture_detection_screenshot(frame, class_name, track_id):
+    """Capture and encode a screenshot of the detected food item"""
+    encoded_image = encode_frame_to_base64(frame)
+    return {
+        'image': encoded_image,
+        'class_name': class_name,
+        'track_id': track_id,
+        'timestamp': time.time()
+    }
+
+def detect_objects(frame):
+    """
+    Your existing object detection function
+    Should return a dictionary of detected items and their counts
+    """
+    # This is a placeholder - replace with your actual detection logic
+    detected_items = {"apple": 1, "banana": 2}  # Example
+    return detected_items
+
 @socketio.on('connect')
 def handle_connect():
     logger.info('Client connected')
@@ -36,9 +66,16 @@ def handle_disconnect():
     logger.info('Client disconnected')
 
 def generate_frames():
-    camera = cv2.VideoCapture(0)  # Remove cv2.CAP_DSHOW for macOS compatibility
+    camera = cv2.VideoCapture(0)
     last_emit_time = 0
-    emit_interval = 0.5  # Emit updates every 0.5 seconds
+    last_screenshot_time = 0  # Add screenshot timing control
+    emit_interval = 0.5
+    screenshot_interval = 1.0  # Take screenshots every second
+    
+    tracked_screenshots = set()  # Keep track of which objects we've already captured
+    tracked_objects = {} # Dictionary to store tracked objects {track_id: {'class_name': name, 'center_x': x, 'last_seen': timestamp}}
+    frame_width = None
+    edge_threshold = 50 # Pixels from edge to consider as exit
 
     while True:
         success, frame = camera.read()
@@ -46,35 +83,117 @@ def generate_frames():
             logger.error("Failed to read frame from camera")
             break
         else:
+            if frame_width is None:
+                frame_width = frame.shape[1] # Get frame width once
+
             total_price = 0
             detected_items = {}
-            results = model(frame, conf=0.5, stream=True)
+            # Use model.track instead of model() for object tracking
+            results = model.track(frame, persist=True, conf=0.5, verbose=False) # persist=True maintains tracks across frames
 
-            for result in results:
-                if result.boxes is not None:
-                    boxes = result.boxes
-                    for box in boxes:
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        class_idx = int(box.cls[0])  # class index
-                        class_name = result.names[class_idx]  # class name from index
-                        confidence = float(box.conf[0])  # confidence score
+            current_track_ids = set()
 
-                        # Compute the price based on specific detected class
-                        price = menu.get(class_name, 0)
-                        total_price += price
+            # Check if tracking results exist and have IDs
+            if results and results[0].boxes is not None and results[0].boxes.id is not None:
+                boxes = results[0].boxes # Get boxes from the first (and likely only) result
+                track_ids = boxes.id.int().cpu().tolist() # Get track IDs
+                class_indices = boxes.cls.int().cpu().tolist() # Get class indices
+                xyxy_coords = boxes.xyxy.cpu().tolist() # Get coordinates
+                confidences = boxes.conf.cpu().tolist() # Get confidences
+                class_names = results[0].names # Get class names mapping
 
-                        # also collect the class name of detected food to send to frontend
-                        if class_name in detected_items:
-                            detected_items[class_name] += 1
-                        else:
-                            detected_items[class_name] = 1
+                for track_id, class_idx, coords, conf in zip(track_ids, class_indices, xyxy_coords, confidences):
+                    current_track_ids.add(track_id)
+                    x1, y1, x2, y2 = map(int, coords)
+                    class_name = class_names[class_idx]
+                    confidence = float(conf)
+                    center_x = (x1 + x2) / 2
 
-                        # draw the bounding box
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    # Update tracked object state
+                    tracked_objects[track_id] = {
+                        'class_name': class_name,
+                        'center_x': center_x,
+                        'last_seen': time.time()
+                    }
 
-                        # draw the label text
-                        label = "{} ({:.2f})".format(class_name, confidence)
-                        cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                    # Compute the price based on specific detected class
+                    price = menu.get(class_name, 0)
+                    total_price += price
+
+                    # also collect the class name of detected food to send to frontend
+                    if class_name in detected_items:
+                        detected_items[class_name] += 1
+                    else:
+                        detected_items[class_name] = 1
+
+                    # draw the bounding box
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+                    # draw the label text
+                    label = f"{class_name} ID:{track_id} ({confidence:.2f})"
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+
+                    # Only take screenshots for new objects we haven't seen before
+                    # and respect the screenshot interval
+                    if (track_id not in tracked_screenshots and 
+                        time.time() - last_screenshot_time >= screenshot_interval):
+                        
+                        # Crop the frame to just the detection area (with some padding)
+                        padding = 20
+                        crop_x1 = max(0, x1 - padding)
+                        crop_y1 = max(0, y1 - padding)
+                        crop_x2 = min(frame.shape[1], x2 + padding)
+                        crop_y2 = min(frame.shape[0], y2 + padding)
+                        cropped_frame = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+                        
+                        if cropped_frame.size > 0:  # Ensure we have a valid crop
+                            screenshot_data = capture_detection_screenshot(cropped_frame, class_name, track_id)
+                            try:
+                                socketio.emit('detection_screenshot', screenshot_data)
+                                tracked_screenshots.add(track_id)
+                                last_screenshot_time = time.time()
+                            except Exception as e:
+                                logger.error(f'Failed to emit screenshot: {str(e)}')
+
+            # Check for objects that disappeared near the edges
+            previous_track_ids = set(tracked_objects.keys())
+            lost_track_ids = previous_track_ids - current_track_ids
+
+            for track_id in lost_track_ids:
+                if track_id in tracked_objects: # Check if we still have info
+                    track_info = tracked_objects[track_id]
+                    last_center_x = track_info['center_x']
+                    class_name = track_info['class_name']
+
+                    # Check if it disappeared near left or right edge
+                    if last_center_x < edge_threshold:
+                        log_message = f"input ({class_name})"
+                        logger.info(log_message)
+                        # Emit movement event to frontend
+                        try:
+                            socketio.emit('movement_event', {'type': 'input', 'item': class_name, 'message': log_message})
+                            logger.debug(f"Successfully emitted input event for {class_name}")
+                        except Exception as e:
+                            logger.error(f'Failed to emit input event: {str(e)}')
+                        del tracked_objects[track_id] # Remove from tracking
+                    elif last_center_x > frame_width - edge_threshold:
+                        log_message = f"output ({class_name})"
+                        logger.info(log_message)
+                        # Emit movement event to frontend
+                        try:
+                            socketio.emit('movement_event', {'type': 'output', 'item': class_name, 'message': log_message})
+                            logger.debug(f"Successfully emitted output event for {class_name}")
+                        except Exception as e:
+                            logger.error(f'Failed to emit output event: {str(e)}')
+                        del tracked_objects[track_id] # Remove from tracking
+                    # Optional: Handle objects disappearing elsewhere or cleanup old tracks
+                    # elif time.time() - track_info['last_seen'] > 1.0: # Remove if unseen for 1 sec
+                        # logger.debug(f"Track {track_id} ({class_name}) timed out.")
+                        # del tracked_objects[track_id]
+
+            # Clean up old tracked screenshots periodically
+            if len(tracked_screenshots) > 50:  # Arbitrary limit
+                tracked_screenshots.clear()
 
             # Emit updates at regular intervals to prevent overwhelming the client
             current_time = time.time()
