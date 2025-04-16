@@ -1,4 +1,4 @@
-from flask import Flask, render_template, Response
+from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO, emit
 import cv2
 from ultralytics import YOLO
@@ -6,6 +6,10 @@ import time
 import logging
 import numpy as np
 import base64
+import requests
+import re
+from openai import OpenAI
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +35,9 @@ menu = {
 
 # Global variable for the camera
 camera = cv2.VideoCapture(0)
+
+# Update the OpenAI client initialization (remove the old OPENAI_API_KEY constant)
+client = OpenAI(api_key="your_api_key")
 
 def encode_frame_to_base64(frame):
     """Convert an OpenCV frame to base64 string with compression"""
@@ -223,6 +230,47 @@ def index():
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/analyze_image', methods=['POST'])
+def analyze_image():
+    try:
+        image_data = request.json.get('image')
+        if not image_data:
+            return jsonify({'error': 'No image data provided'}), 400
+
+        response = client.responses.create(
+            model="gpt-4.1",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "What food item is in this image? Return only the food name and a confidence percentage between 1-100."
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:image/jpeg;base64,{image_data}"
+                        }
+                    ]
+                }
+            ]
+        )
+
+        # Parse the response text to extract food and confidence
+        response_text = response.output_text
+        food = response_text.split('(')[0].strip()
+        confidence_match = re.search(r'(\d+)', response_text)
+        confidence = int(confidence_match.group(1)) if confidence_match else 90
+
+        return jsonify({
+            'food': food,
+            'confidence': confidence
+        })
+
+    except Exception as e:
+        logger.error(f"Error analyzing image: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, host='0.0.0.0', port=5001)

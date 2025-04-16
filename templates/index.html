@@ -6,6 +6,8 @@
     <title>Food Detection</title>
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/openai@4.0.0/dist/openai.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <style>
         body {
             padding-top: 20px;
@@ -70,12 +72,45 @@
             border: 1px solid #eee;
             border-radius: 5px;
             text-align: center;
-            max-width: 200px;
+            max-width: 250px;
         }
         .screenshot-item img {
             width: 100%;
             height: auto;
             border-radius: 3px;
+        }
+        .analyze-button {
+            margin-top: 5px;
+            padding: 2px 8px;
+            font-size: 12px;
+        }
+        .analysis-result {
+            font-size: 12px;
+            margin-top: 5px;
+            color: #666;
+        }
+        .analysis-details {
+            background-color: #f8f9fa;
+            padding: 8px;
+            border-radius: 4px;
+            margin-top: 8px;
+            font-size: 12px;
+        }
+        .confidence-bar-container {
+            margin: 5px 0;
+        }
+        .confidence-label {
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 2px;
+        }
+        .comparison {
+            font-size: 11px;
+            padding-top: 4px;
+            border-top: 1px solid #eee;
+        }
+        .ai-detection {
+            margin-bottom: 5px;
         }
     </style>
 </head>
@@ -164,6 +199,12 @@
         });
 
         socket.on('detection_screenshot', function(data) {
+            console.log('Received new screenshot:', {
+                class_name: data.class_name,
+                track_id: data.track_id,
+                timestamp: new Date(data.timestamp).toLocaleString()
+            });
+
             const screenshotContainer = document.getElementById('screenshot-container');
             
             // Create screenshot element
@@ -173,22 +214,104 @@
             // Create and set up the image
             const img = document.createElement('img');
             img.src = `data:image/jpeg;base64,${data.image}`;
+            console.log('Created image element with base64 data');
             
             // Create caption
             const caption = document.createElement('p');
             caption.className = 'mt-2 mb-0';
-            caption.textContent = `${data.class_name} (ID: ${data.track_id})`;
+            caption.textContent = `Model Detection: ${data.class_name} (ID: ${data.track_id})`;
+            
+            // Create analysis container
+            const analysisContainer = document.createElement('div');
+            analysisContainer.className = 'analysis-container mt-2';
+            
+            // Add analyze button
+            const analyzeButton = document.createElement('button');
+            analyzeButton.className = 'btn btn-sm btn-info analyze-button';
+            analyzeButton.textContent = 'Analyze with AI';
+            
+            // Create result div with enhanced styling
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'analysis-result mt-2';
+            
+            // Add click handler for analysis
+            analyzeButton.addEventListener('click', async () => {
+                console.log('Starting AI analysis for:', {
+                    class_name: data.class_name,
+                    track_id: data.track_id
+                });
+
+                analyzeButton.disabled = true;
+                analyzeButton.textContent = 'Analyzing...';
+                
+                try {
+                    console.time('AI Analysis Duration');
+                    const response = await analyzeImage(data.image);
+                    console.timeEnd('AI Analysis Duration');
+                    
+                    console.log('AI Analysis Results:', {
+                        detected_food: response.food,
+                        confidence: response.confidence,
+                        matches_model: response.food.toLowerCase() === data.class_name.toLowerCase()
+                    });
+                    
+                    // Create a more detailed analysis display
+                    const analysisHTML = `
+                        <div class="analysis-details">
+                            <div class="ai-detection">
+                                <strong>AI Detection:</strong> ${response.food}
+                            </div>
+                            <div class="confidence-bar-container">
+                                <div class="confidence-label">
+                                    Confidence: ${response.confidence}%
+                                </div>
+                                <div class="progress" style="height: 5px;">
+                                    <div class="progress-bar ${getConfidenceColorClass(response.confidence)}" 
+                                         role="progressbar" 
+                                         style="width: ${response.confidence}%" 
+                                         aria-valuenow="${response.confidence}" 
+                                         aria-valuemin="0" 
+                                         aria-valuemax="100">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="comparison mt-1 ${response.food.toLowerCase() === data.class_name.toLowerCase() ? 'text-success' : 'text-warning'}">
+                                ${getComparisonText(response.food, data.class_name)}
+                            </div>
+                        </div>
+                    `;
+                    
+                    resultDiv.innerHTML = analysisHTML;
+                    console.log('Analysis display updated successfully');
+
+                } catch (error) {
+                    console.error('AI Analysis failed:', error);
+                    resultDiv.innerHTML = `
+                        <div class="text-danger">
+                            <i class="fas fa-exclamation-circle"></i>
+                            Analysis failed. Please try again.
+                        </div>
+                    `;
+                } finally {
+                    analyzeButton.disabled = false;
+                    analyzeButton.textContent = 'Analyze with AI';
+                }
+            });
             
             // Add elements to container
             screenshotItem.appendChild(img);
             screenshotItem.appendChild(caption);
+            screenshotItem.appendChild(analyzeButton);
+            screenshotItem.appendChild(resultDiv);
             
             // Add to the beginning of the container
             screenshotContainer.insertBefore(screenshotItem, screenshotContainer.firstChild);
+            console.log('New screenshot item added to container');
             
             // Keep only the last 10 screenshots
             while (screenshotContainer.children.length > 10) {
                 screenshotContainer.removeChild(screenshotContainer.lastChild);
+                console.log('Removed oldest screenshot to maintain limit');
             }
         });
 
@@ -237,6 +360,69 @@
             // Keep only the last 20 detections
             while (detectionList.children.length > 20) {
                 detectionList.removeChild(detectionList.lastChild);
+            }
+        }
+
+        // Update helper functions with logging
+        function getConfidenceColorClass(confidence) {
+            let colorClass;
+            if (confidence >= 90) colorClass = 'bg-success';
+            else if (confidence >= 70) colorClass = 'bg-info';
+            else if (confidence >= 50) colorClass = 'bg-warning';
+            else colorClass = 'bg-danger';
+            
+            console.log('Confidence level styling:', {
+                confidence: confidence,
+                colorClass: colorClass
+            });
+            
+            return colorClass;
+        }
+
+        function getComparisonText(aiFood, modelFood) {
+            const matches = aiFood.toLowerCase() === modelFood.toLowerCase();
+            const result = matches 
+                ? `<i class="fas fa-check"></i> AI confirms model detection`
+                : `<i class="fas fa-exclamation-triangle"></i> AI detection differs from model`;
+            
+            console.log('Detection comparison:', {
+                ai_detection: aiFood,
+                model_detection: modelFood,
+                matches: matches
+            });
+            
+            return result;
+        }
+
+        // Update analyzeImage function with logging
+        async function analyzeImage(base64Image) {
+            console.log('Starting image analysis request');
+            try {
+                const response = await fetch('/analyze_image', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        image: base64Image
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('API Error:', errorData);
+                    throw new Error(`Analysis failed: ${errorData.error || 'Unknown error'}`);
+                }
+
+                const result = await response.json();
+                console.log('Analysis completed successfully:', {
+                    food: result.food,
+                    confidence: result.confidence
+                });
+                return result;
+            } catch (error) {
+                console.error('Error during image analysis:', error);
+                throw error;
             }
         }
     </script>
