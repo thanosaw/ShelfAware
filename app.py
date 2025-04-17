@@ -37,7 +37,7 @@ menu = {
 camera = cv2.VideoCapture(0)
 
 # Update the OpenAI client initialization (remove the old OPENAI_API_KEY constant)
-client = OpenAI(api_key="your_api_key")
+client = OpenAI(api_key="api_key")
 
 def encode_frame_to_base64(frame):
     """Convert an OpenCV frame to base64 string with compression"""
@@ -234,42 +234,69 @@ def video_feed():
 @app.route('/analyze_image', methods=['POST'])
 def analyze_image():
     try:
+        logger.info("Starting image analysis request")
         image_data = request.json.get('image')
         if not image_data:
+            logger.error("No image data provided in request")
             return jsonify({'error': 'No image data provided'}), 400
 
-        response = client.responses.create(
-            model="gpt-4.1",
-            input=[
+        logger.info("Making OpenAI API request")
+        response = client.chat.completions.create(
+            model="gpt-4.1",  # Update this if needed to match your API requirements
+            messages=[
                 {
                     "role": "user",
                     "content": [
                         {
-                            "type": "input_text",
-                            "text": "What food item is in this image? Return only the food name and a confidence percentage between 1-100."
+                            "type": "text",
+                            "text": "what is in this image? Disregard any text labels and identify it yourself. The image contains food items that are being tracked entering a fridge. Please identify the specific food item and provide a confidence level. If it is not food, say unknown."
                         },
                         {
-                            "type": "input_image",
-                            "image_url": f"data:image/jpeg;base64,{image_data}"
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_data}"
+                            }
                         }
                     ]
                 }
-            ]
+            ],
+            max_tokens=300
         )
 
-        # Parse the response text to extract food and confidence
-        response_text = response.output_text
-        food = response_text.split('(')[0].strip()
-        confidence_match = re.search(r'(\d+)', response_text)
-        confidence = int(confidence_match.group(1)) if confidence_match else 90
+        logger.info("Received response from OpenAI")
+        logger.debug(f"Raw response: {response}")
 
-        return jsonify({
-            'food': food,
-            'confidence': confidence
-        })
+        # Extract the response text
+        response_text = response.choices[0].message.content
+        logger.debug(f"Response text: {response_text}")
+
+        # Parse the response for food item and confidence
+        try:
+            # More flexible parsing to handle various response formats
+            food = response_text.split('(')[0].strip()
+            confidence_match = re.search(r'(\d+)%?', response_text)
+            confidence = int(confidence_match.group(1)) if confidence_match else 90
+
+            result = {
+                'food': food,
+                'confidence': confidence,
+                'raw_response': response_text  # Include raw response for debugging
+            }
+            
+            logger.info(f"Analysis complete: {result}")
+            return jsonify(result)
+
+        except Exception as parse_error:
+            logger.error(f"Error parsing OpenAI response: {parse_error}")
+            return jsonify({
+                'food': response_text[:50] + "...",  # Return truncated response
+                'confidence': 70,  # Default confidence
+                'parsing_error': str(parse_error),
+                'raw_response': response_text
+            })
 
     except Exception as e:
-        logger.error(f"Error analyzing image: {str(e)}")
+        logger.error(f"Error during image analysis: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
