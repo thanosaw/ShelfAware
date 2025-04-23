@@ -36,7 +36,8 @@ socketio = SocketIO(
 )
 
 # YOLO model (change path if needed)
-model = YOLO("model/food_detector_small.pt")
+# model = YOLO("model/food_detector_small.pt")
+model = YOLO("yolov8n.pt")
 
 # OpenAI client (ensure OPENAI_API_KEY is set in your env)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "your_key_here"))
@@ -114,97 +115,121 @@ def capture_detection_screenshot(frame, class_name, track_id):
 def generate_frames():
     global last_screenshot_time
 
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     if not cap.isOpened():
-        logger.error("Could not open camera")
+        logger.error(f"Could not open camera at index {1}")
         return
 
-    emit_interval = 0.5
+    emit_interval       = 0.5
     screenshot_interval = 1.0
-    last_emit_time = 0.0
+    last_emit_time      = 0.0
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # 1) digital zoom
+        # 1) Digital zoom
         frame = digital_zoom(frame, ZOOM_FACTOR)
         h, w = frame.shape[:2]
 
-        # 2) YOLO tracking
+        # 2) YOLO track/detect
         results = model.track(frame, persist=True, conf=CONF_THRESHOLD, verbose=False)
 
-        current_ids = set()
+        current_ids    = set()
         detected_items = {}
 
         if results and results[0].boxes is not None:
             boxes = results[0].boxes
-            ids = boxes.id.int().cpu().tolist()
-            classes = boxes.cls.int().cpu().tolist()
-            coords = boxes.xyxy.cpu().tolist()
-            confs = boxes.conf.cpu().tolist()
             names = results[0].names
 
-            for tid, cls, (x1, y1, x2, y2), conf in zip(ids, classes, coords, confs):
-                label = names[cls]
-                if label == IGNORE_LABEL:
-                    continue
+            # --- CASE A: no track IDs yet ---
+            if boxes.id is None:
+                coords   = boxes.xyxy.cpu().tolist()
+                confs    = boxes.conf.cpu().tolist()
+                cls_idxs = boxes.cls.int().cpu().tolist()
 
-                cx, cy = ( (x1+x2)/2, (y1+y2)/2 )
-                current_ids.add(tid)
+                for (x1, y1, x2, y2), conf, cls_idx in zip(coords, confs, cls_idxs):
+                    label = names[cls_idx]
+                    if label == IGNORE_LABEL:
+                        continue
 
-                # init or reset lost_frames
-                if tid not in tracks:
-                    tracks[tid] = {
-                        'label': label,
-                        'center': (cx, cy),
-                        'start_side': None,
-                        'current_side': None,
-                        'has_crossed_in': False,
-                        'has_crossed_out': False,
-                        'lost_frames': 0
-                    }
-                else:
-                    tracks[tid]['lost_frames'] = 0
+                    x1_i, y1_i, x2_i, y2_i = map(int, (x1, y1, x2, y2))
+                    cv2.rectangle(frame, (x1_i, y1_i), (x2_i, y2_i), (255, 0, 0), 2)
+                    text = f"{label} ({conf:.2f})"
+                    cv2.putText(frame, text, (x1_i, y1_i - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
-                # update crossing logic
-                update_track_side(tid, (cx, cy))
+                    detected_items[label] = detected_items.get(label, 0) + 1
 
-                # price + count
-                detected_items[label] = detected_items.get(label, 0) + 1
+            # --- CASE B: tracker IDs are present ---
+            else:
+                ids      = boxes.id.int().cpu().tolist()
+                cls_idxs = boxes.cls.int().cpu().tolist()
+                coords   = boxes.xyxy.cpu().tolist()
+                confs    = boxes.conf.cpu().tolist()
 
-                # screenshot capture
-                now = time.time()
-                if (tid not in tracked_screenshots
-                        and now - last_screenshot_time >= screenshot_interval):
-                    padding = 20
-                    x1i, y1i = max(0, int(x1)-padding), max(0, int(y1)-padding)
-                    x2i, y2i = min(w, int(x2)+padding), min(h, int(y2)+padding)
-                    crop = frame[y1i:y2i, x1i:x2i]
-                    if crop.size:
-                        data = capture_detection_screenshot(crop, label, tid)
-                        socketio.emit('detection_screenshot', data)
-                        tracked_screenshots.add(tid)
-                        last_screenshot_time = now
+                for tid, cls_idx, (x1, y1, x2, y2), conf in zip(ids, cls_idxs, coords, confs):
+                    label = names[cls_idx]
+                    if label == IGNORE_LABEL:
+                        continue
 
-                # draw bbox + label
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
-                text = f"{label} ID:{tid} ({conf:.2f})"
-                cv2.putText(frame, text, (int(x1), int(y1)-10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                    cx, cy = ((x1 + x2) / 2, (y1 + y2) / 2)
+                    current_ids.add(tid)
 
-        # 3) handle lost tracks
+                    # init or reset track
+                    if tid not in tracks:
+                        tracks[tid] = {
+                            'label': label,
+                            'center': (cx, cy),
+                            'start_side': None,
+                            'current_side': None,
+                            'has_crossed_in': False,
+                            'has_crossed_out': False,
+                            'lost_frames': 0
+                        }
+                    else:
+                        tracks[tid]['lost_frames'] = 0
+
+                    # update crossing / inventory
+                    update_track_side(tid, (cx, cy))
+
+                    # screenshot logic (unchanged)
+                    now = time.time()
+                    if (tid not in tracked_screenshots
+                            and now - last_screenshot_time >= screenshot_interval):
+                        padding = 20
+                        x1i = max(0, int(x1) - padding)
+                        y1i = max(0, int(y1) - padding)
+                        x2i = min(w, int(x2) + padding)
+                        y2i = min(h, int(y2) + padding)
+                        crop = frame[y1i:y2i, x1i:x2i]
+                        if crop.size:
+                            data = capture_detection_screenshot(crop, label, tid)
+                            socketio.emit('detection_screenshot', data)
+                            tracked_screenshots.add(tid)
+                            last_screenshot_time = now
+
+                    # draw box + label
+                    x1_i, y1_i, x2_i, y2_i = map(int, (x1, y1, x2, y2))
+                    cv2.rectangle(frame, (x1_i, y1_i), (x2_i, y2_i), (255, 0, 0), 2)
+                    text = f"{label} ID:{tid} ({conf:.2f})"
+                    cv2.putText(frame, text, (x1_i, y1_i - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+
+                    detected_items[label] = detected_items.get(label, 0) + 1
+
+        # 3) Cleanup lost tracks
         for tid in list(tracks):
             if tid not in current_ids:
                 tracks[tid]['lost_frames'] += 1
                 if tracks[tid]['lost_frames'] > MAX_LOST_FRAMES:
                     del tracks[tid]
 
-        # 4) draw fridge boundary
-        cv2.line(frame, (0, BOUNDARY_Y), (w, BOUNDARY_Y), (0,0,255), 2)
+        # 4) Draw the boundary line
+        cv2.line(frame, (0, BOUNDARY_Y), (w, BOUNDARY_Y), (0, 0, 255), 2)
 
-        # 5) emit detection counts
+        # 5) Emit detection counts at intervals
         now = time.time()
         if now - last_emit_time >= emit_interval:
             socketio.emit('detection_update', {
@@ -213,12 +238,13 @@ def generate_frames():
             })
             last_emit_time = now
 
-        # 6) stream frame
+        # 6) Always yield the frame
         _, buf = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
 
     cap.release()
+
 
 @app.route('/')
 def index():
