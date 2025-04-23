@@ -112,6 +112,28 @@
         .ai-detection {
             margin-bottom: 5px;
         }
+        /* New inventory styles */
+        .inventory-panel {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            text-align: left;
+        }
+        .inventory-panel h3 {
+            margin-bottom: 10px;
+        }
+        #inventory-list {
+            list-style: none;
+            padding-left: 0;
+        }
+        #inventory-list li {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        #inventory-list li:last-child {
+            border-bottom: none;
+        }
     </style>
 </head>
 <body>
@@ -121,6 +143,14 @@
         <button id="toggle-stream" class="btn btn-primary">Start Detection</button>
         <div>
             <img id="video-feed" src="" style="display: none;">
+        </div>
+
+        <!-- Inventory Panel -->
+        <div class="inventory-panel">
+            <h3>Current Inventory</h3>
+            <ul id="inventory-list">
+                <!-- Inventory items will appear here -->
+            </ul>
         </div>
 
         <!-- Screenshot Gallery -->
@@ -141,7 +171,6 @@
     </div>
 
     <script>
-        // Initialize Socket.IO with explicit configuration
         var socket = io.connect('http://' + document.domain + ':5001', {
             transports: ['websocket'],
             upgrade: false,
@@ -151,167 +180,49 @@
             reconnectionAttempts: Infinity
         });
 
-        console.log('Attempting to connect to server...');
-
-        var isStreaming = false;
-        var lastDetectedItems = {};
         const connectionStatus = document.getElementById('connection-status');
+        let isStreaming = false;
+        let lastDetectedItems = {};
 
-        // Socket connection status logging
-        socket.on('connect', function() {
-            console.log('Connected to server successfully');
+        socket.on('connect', () => {
             connectionStatus.textContent = 'Connected';
             connectionStatus.className = 'connected';
         });
-
-        socket.on('disconnect', function() {
-            console.log('Disconnected from server');
+        socket.on('disconnect', () => {
             connectionStatus.textContent = 'Disconnected';
             connectionStatus.className = 'disconnected';
         });
 
-        socket.on('connect_error', function(error) {
-            console.error('Connection error:', error);
-            connectionStatus.textContent = 'Connection Error';
-            connectionStatus.className = 'disconnected';
+        document.getElementById("toggle-stream").addEventListener("click", () => {
+            if (isStreaming) stopStream();
+            else startStream();
         });
 
-        socket.on('error', function(error) {
-            console.error('Socket error:', error);
-        });
-
-        document.getElementById("toggle-stream").addEventListener("click", function() {
-            if (isStreaming) {
-                stopStream();
-            } else {
-                startStream();
-            }
-        });
-
-        socket.on('detection_update', function(data) {
-            console.log('Received detection update:', data);
+        socket.on('detection_update', data => {
             if (data && data.items) {
-                console.log('Updating detection log with items:', data.items);
                 updateDetectionLog(data.items);
-            } else {
-                console.log('No items in detection update');
             }
         });
 
-        socket.on('detection_screenshot', function(data) {
-            console.log('Received new screenshot:', {
-                class_name: data.class_name,
-                track_id: data.track_id,
-                timestamp: new Date(data.timestamp).toLocaleString()
-            });
+        socket.on('detection_screenshot', data => {
+            addScreenshot(data);
+        });
 
-            const screenshotContainer = document.getElementById('screenshot-container');
-            
-            // Create screenshot element
-            const screenshotItem = document.createElement('div');
-            screenshotItem.className = 'screenshot-item';
-            
-            // Create and set up the image
-            const img = document.createElement('img');
-            img.src = `data:image/jpeg;base64,${data.image}`;
-            console.log('Created image element with base64 data');
-            
-            // Create caption
-            const caption = document.createElement('p');
-            caption.className = 'mt-2 mb-0';
-            caption.textContent = `Model Detection: ${data.class_name} (ID: ${data.track_id})`;
-            
-            // Create analysis container
-            const analysisContainer = document.createElement('div');
-            analysisContainer.className = 'analysis-container mt-2';
-            
-            // Add analyze button
-            const analyzeButton = document.createElement('button');
-            analyzeButton.className = 'btn btn-sm btn-info analyze-button';
-            analyzeButton.textContent = 'Analyze with AI';
-            
-            // Create result div with enhanced styling
-            const resultDiv = document.createElement('div');
-            resultDiv.className = 'analysis-result mt-2';
-            
-            // Add click handler for analysis
-            analyzeButton.addEventListener('click', async () => {
-                console.log('Starting AI analysis for:', {
-                    class_name: data.class_name,
-                    track_id: data.track_id
-                });
-
-                analyzeButton.disabled = true;
-                analyzeButton.textContent = 'Analyzing...';
-                
-                try {
-                    console.time('AI Analysis Duration');
-                    const response = await analyzeImage(data.image);
-                    console.timeEnd('AI Analysis Duration');
-                    
-                    console.log('AI Analysis Results:', {
-                        detected_food: response.food,
-                        confidence: response.confidence,
-                        matches_model: response.food.toLowerCase() === data.class_name.toLowerCase()
-                    });
-                    
-                    // Create a more detailed analysis display
-                    const analysisHTML = `
-                        <div class="analysis-details">
-                            <div class="ai-detection">
-                                <strong>AI Detection:</strong> ${response.food}
-                            </div>
-                            <div class="confidence-bar-container">
-                                <div class="confidence-label">
-                                    Confidence: ${response.confidence}%
-                                </div>
-                                <div class="progress" style="height: 5px;">
-                                    <div class="progress-bar ${getConfidenceColorClass(response.confidence)}" 
-                                         role="progressbar" 
-                                         style="width: ${response.confidence}%" 
-                                         aria-valuenow="${response.confidence}" 
-                                         aria-valuemin="0" 
-                                         aria-valuemax="100">
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="comparison mt-1 ${response.food.toLowerCase() === data.class_name.toLowerCase() ? 'text-success' : 'text-warning'}">
-                                ${getComparisonText(response.food, data.class_name)}
-                            </div>
-                        </div>
-                    `;
-                    
-                    resultDiv.innerHTML = analysisHTML;
-                    console.log('Analysis display updated successfully');
-
-                } catch (error) {
-                    console.error('AI Analysis failed:', error);
-                    resultDiv.innerHTML = `
-                        <div class="text-danger">
-                            <i class="fas fa-exclamation-circle"></i>
-                            Analysis failed. Please try again.
-                        </div>
-                    `;
-                } finally {
-                    analyzeButton.disabled = false;
-                    analyzeButton.textContent = 'Analyze with AI';
+        // New: listen for inventory updates
+        socket.on('inventory_update', ({ inventory }) => {
+            const list = document.getElementById('inventory-list');
+            list.innerHTML = '';
+            // If empty
+            if (Object.keys(inventory).length === 0) {
+                const li = document.createElement('li');
+                li.textContent = 'Empty';
+                list.appendChild(li);
+            } else {
+                for (const [item, count] of Object.entries(inventory)) {
+                    const li = document.createElement('li');
+                    li.textContent = `${item}: ${count}`;
+                    list.appendChild(li);
                 }
-            });
-            
-            // Add elements to container
-            screenshotItem.appendChild(img);
-            screenshotItem.appendChild(caption);
-            screenshotItem.appendChild(analyzeButton);
-            screenshotItem.appendChild(resultDiv);
-            
-            // Add to the beginning of the container
-            screenshotContainer.insertBefore(screenshotItem, screenshotContainer.firstChild);
-            console.log('New screenshot item added to container');
-            
-            // Keep only the last 10 screenshots
-            while (screenshotContainer.children.length > 10) {
-                screenshotContainer.removeChild(screenshotContainer.lastChild);
-                console.log('Removed oldest screenshot to maintain limit');
             }
         });
 
@@ -321,7 +232,6 @@
             document.getElementById("toggle-stream").innerText = "Stop Detection";
             isStreaming = true;
         }
-
         function stopStream() {
             document.getElementById("video-feed").src = "";
             document.getElementById("video-feed").style.display = "none";
@@ -330,100 +240,93 @@
         }
 
         function updateDetectionLog(items) {
-            console.log('updateDetectionLog called with items:', items);
             const detectionList = document.getElementById("detection-list");
             const timestamp = new Date().toLocaleTimeString();
-            
-            // Only add new detections, don't clear the list
             for (const [item, count] of Object.entries(items)) {
-                // Check if this is a new detection or different count
                 if (!lastDetectedItems[item] || lastDetectedItems[item] !== count) {
-                    console.log('Adding detection item:', item, count);
-                    const detectionItem = document.createElement("div");
-                    detectionItem.className = "detection-item new";
-                    detectionItem.innerHTML = `
-                        <strong>${timestamp}</strong> - Detected: ${item} (${count} ${count > 1 ? 'items' : 'item'})
-                    `;
-                    // Add to the top of the list
-                    detectionList.insertBefore(detectionItem, detectionList.firstChild);
-                    
-                    // Remove the 'new' class after animation
-                    setTimeout(() => {
-                        detectionItem.classList.remove('new');
-                    }, 1000);
+                    const el = document.createElement("div");
+                    el.className = "detection-item new";
+                    el.innerHTML = `<strong>${timestamp}</strong> - Detected: ${item} (${count})`;
+                    detectionList.insertBefore(el, detectionList.firstChild);
+                    setTimeout(() => el.classList.remove('new'), 1000);
                 }
             }
-            
-            // Update last detected items
-            lastDetectedItems = {...items};
-            
-            // Keep only the last 20 detections
+            lastDetectedItems = { ...items };
+            // trim to 20
             while (detectionList.children.length > 20) {
                 detectionList.removeChild(detectionList.lastChild);
             }
         }
 
-        // Update helper functions with logging
-        function getConfidenceColorClass(confidence) {
-            let colorClass;
-            if (confidence >= 90) colorClass = 'bg-success';
-            else if (confidence >= 70) colorClass = 'bg-info';
-            else if (confidence >= 50) colorClass = 'bg-warning';
-            else colorClass = 'bg-danger';
-            
-            console.log('Confidence level styling:', {
-                confidence: confidence,
-                colorClass: colorClass
-            });
-            
-            return colorClass;
-        }
+        function addScreenshot(data) {
+            const container = document.getElementById('screenshot-container');
+            const div = document.createElement('div');
+            div.className = 'screenshot-item';
 
-        function getComparisonText(aiFood, modelFood) {
-            const matches = aiFood.toLowerCase() === modelFood.toLowerCase();
-            const result = matches 
-                ? `<i class="fas fa-check"></i> AI confirms model detection`
-                : `<i class="fas fa-exclamation-triangle"></i> AI detection differs from model`;
-            
-            console.log('Detection comparison:', {
-                ai_detection: aiFood,
-                model_detection: modelFood,
-                matches: matches
-            });
-            
-            return result;
-        }
+            const img = document.createElement('img');
+            img.src = `data:image/jpeg;base64,${data.image}`;
 
-        // Update analyzeImage function with logging
-        async function analyzeImage(base64Image) {
-            console.log('Starting image analysis request');
-            try {
-                const response = await fetch('/analyze_image', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        image: base64Image
-                    })
-                });
+            const caption = document.createElement('p');
+            caption.className = 'mt-2 mb-0';
+            caption.textContent = `Model: ${data.class_name} (ID ${data.track_id})`;
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    console.error('API Error:', errorData);
-                    throw new Error(`Analysis failed: ${errorData.error || 'Unknown error'}`);
+            const analyzeBtn = document.createElement('button');
+            analyzeBtn.className = 'btn btn-sm btn-info analyze-button';
+            analyzeBtn.textContent = 'Analyze with AI';
+
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'analysis-result mt-2';
+
+            analyzeBtn.addEventListener('click', async () => {
+                analyzeBtn.disabled = true;
+                analyzeBtn.textContent = 'Analyzing...';
+                try {
+                    const res = await analyzeImage(data.image);
+                    const html = `
+                        <div class="analysis-details">
+                            <div class="ai-detection"><strong>AI:</strong> ${res.food}</div>
+                            <div class="confidence-bar-container">
+                                <div class="confidence-label">Confidence: ${res.confidence}%</div>
+                                <div class="progress" style="height:5px;">
+                                  <div class="progress-bar ${getConfidenceColorClass(res.confidence)}" 
+                                       style="width:${res.confidence}%"></div>
+                                </div>
+                            </div>
+                            <div class="comparison ${res.food.toLowerCase()===data.class_name.toLowerCase()?'text-success':'text-warning'}">
+                              ${res.food.toLowerCase()===data.class_name.toLowerCase()
+                                ? '<i class="fas fa-check"></i> Match'
+                                : '<i class="fas fa-exclaim"></i> Diff'}
+                            </div>
+                        </div>`;
+                    resultDiv.innerHTML = html;
+                } catch (e) {
+                    resultDiv.innerHTML = '<div class="text-danger">Analysis failed.</div>';
+                } finally {
+                    analyzeBtn.disabled = false;
+                    analyzeBtn.textContent = 'Analyze with AI';
                 }
+            });
 
-                const result = await response.json();
-                console.log('Analysis completed successfully:', {
-                    food: result.food,
-                    confidence: result.confidence
-                });
-                return result;
-            } catch (error) {
-                console.error('Error during image analysis:', error);
-                throw error;
-            }
+            div.append(img, caption, analyzeBtn, resultDiv);
+            container.insertBefore(div, container.firstChild);
+            while (container.children.length > 10) container.removeChild(container.lastChild);
+        }
+
+        async function analyzeImage(base64Image) {
+            const resp = await fetch('/analyze_image', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ image: base64Image })
+            });
+            if (!resp.ok) throw await resp.json();
+            return await resp.json();
+        }
+
+        function getConfidenceColorClass(c) {
+            if (c >= 90) return 'bg-success';
+            if (c >= 70) return 'bg-info';
+            if (c >= 50) return 'bg-warning';
+            return 'bg-danger';
         }
     </script>
 
