@@ -12,9 +12,9 @@ from ultralytics import YOLO
 from openai import OpenAI
 
 # Constants for computer vision
-BOUNDARY_Y = 500            # y-coordinate of the "door" line
-ZOOM_FACTOR = 1.0          # digital zoom factor
-CONF_THRESHOLD = 0.5       # YOLO confidence threshold
+BOUNDARY_Y = 550            # y-coordinate of the "door" line
+ZOOM_FACTOR = 1.1          # digital zoom factor
+CONF_THRESHOLD = 0.3       # YOLO confidence threshold
 MAX_LOST_FRAMES = 5        # drop tracks after this many missed frames
 IGNORE_LABEL = "person"    # skip these detections
 MIN_TRACK_DISTANCE = 50    # minimum distance to consider a new track
@@ -41,7 +41,8 @@ socketio = SocketIO(
 )
 
 # Initialize YOLO model
-model = YOLO("yolov8n.pt")
+# model = YOLO("yolov8n.pt")
+model = YOLO("yolo11n.pt")
 
 # OpenAI client (ensure OPENAI_API_KEY is set in your env)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "your_api_key_here"))
@@ -461,3 +462,6 @@ def analyze_inventory():
 # --------------------------------------------------------------------
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5001, debug=True)
+
+
+
