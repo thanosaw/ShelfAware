@@ -61,28 +61,16 @@
             color: white;
         }
         .screenshot-gallery {
-            margin-top: 20px;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
+            display: none;
         }
         .screenshot-item {
-            margin: 10px;
-            padding: 10px;
-            border: 1px solid #eee;
-            border-radius: 5px;
-            text-align: center;
-            max-width: 250px;
+            display: none;
         }
         .screenshot-item img {
-            width: 100%;
-            height: auto;
-            border-radius: 3px;
+            display: none;
         }
         .analyze-button {
-            margin-top: 5px;
-            padding: 2px 8px;
-            font-size: 12px;
+            display: none;
         }
         .analysis-result {
             font-size: 12px;
@@ -134,6 +122,92 @@
         #inventory-list li:last-child {
             border-bottom: none;
         }
+        .inventory-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .inventory-images {
+            display: flex;
+            gap: 5px;
+            margin-top: 5px;
+        }
+        .inventory-image {
+            width: 50px;
+            height: 50px;
+            object-fit: cover;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .inventory-image:hover {
+            opacity: 0.8;
+        }
+        .analyze-all-btn {
+            margin-left: 10px;
+            padding: 2px 8px;
+            font-size: 12px;
+        }
+        .analysis-results {
+            margin-top: 5px;
+            padding: 5px;
+            background-color: #f8f9fa;
+            border-radius: 3px;
+        }
+        .analysis-result-item {
+            font-size: 12px;
+            margin-bottom: 3px;
+        }
+        .ai-inventory-panel {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            text-align: left;
+            display: none; /* Hidden by default, shown after analysis */
+        }
+        .ai-inventory-item {
+            padding: 10px;
+            margin-bottom: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #eee;
+        }
+        .ai-inventory-item h4 {
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .unknown-item {
+            background-color: #fff3cd;
+            border-color: #ffeeba;
+        }
+        .unknown-item-input {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        .unknown-item-input input {
+            flex-grow: 1;
+        }
+        .confidence-badge {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background-color: #e9ecef;
+        }
+        .confidence-high {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .confidence-medium {
+            background-color: #cce5ff;
+            color: #004085;
+        }
+        .confidence-low {
+            background-color: #fff3cd;
+            color: #856404;
+        }
     </style>
 </head>
 <body>
@@ -147,17 +221,22 @@
 
         <!-- Inventory Panel -->
         <div class="inventory-panel">
-            <h3>Current Inventory</h3>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3 class="mb-0">Current Inventory</h3>
+                <button id="analyze-all-btn" class="btn btn-primary">
+                    <i class="fas fa-robot"></i> Analyze All Items
+                </button>
+            </div>
             <ul id="inventory-list">
                 <!-- Inventory items will appear here -->
             </ul>
         </div>
 
-        <!-- Screenshot Gallery -->
-        <div class="screenshot-gallery mt-4">
-            <h3>Detection Screenshots</h3>
-            <div id="screenshot-container" class="d-flex flex-wrap justify-content-center">
-                <!-- Screenshots will be added here -->
+        <!-- AI-Verified Inventory -->
+        <div class="ai-inventory-panel">
+            <h3>AI-Verified Inventory</h3>
+            <div id="ai-inventory-list">
+                <!-- AI-verified items will appear here -->
             </div>
         </div>
 
@@ -204,10 +283,6 @@
             }
         });
 
-        socket.on('detection_screenshot', data => {
-            addScreenshot(data);
-        });
-
         // New: listen for inventory updates
         socket.on('inventory_update', ({ inventory }) => {
             const list = document.getElementById('inventory-list');
@@ -218,9 +293,38 @@
                 li.textContent = 'Empty';
                 list.appendChild(li);
             } else {
-                for (const [item, count] of Object.entries(inventory)) {
+                for (const [item, data] of Object.entries(inventory)) {
                     const li = document.createElement('li');
-                    li.textContent = `${item}: ${count}`;
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'inventory-item';
+                    
+                    // Item name and count
+                    const itemText = document.createElement('span');
+                    itemText.textContent = `${item}: ${data.count}`;
+                    
+                    // Analyze all button
+                    const analyzeBtn = document.createElement('button');
+                    analyzeBtn.className = 'btn btn-sm btn-info analyze-all-btn';
+                    analyzeBtn.textContent = 'Analyze All';
+                    analyzeBtn.onclick = () => analyzeInventoryItem(item);
+                    
+                    // Images container
+                    const imagesDiv = document.createElement('div');
+                    imagesDiv.className = 'inventory-images';
+                    
+                    // Add each image
+                    data.images.forEach((imgData, index) => {
+                        const img = document.createElement('img');
+                        img.className = 'inventory-image';
+                        img.src = `data:image/jpeg;base64,${imgData}`;
+                        img.alt = `${item} ${index + 1}`;
+                        imagesDiv.appendChild(img);
+                    });
+                    
+                    itemDiv.appendChild(itemText);
+                    itemDiv.appendChild(analyzeBtn);
+                    li.appendChild(itemDiv);
+                    li.appendChild(imagesDiv);
                     list.appendChild(li);
                 }
             }
@@ -258,60 +362,6 @@
             }
         }
 
-        function addScreenshot(data) {
-            const container = document.getElementById('screenshot-container');
-            const div = document.createElement('div');
-            div.className = 'screenshot-item';
-
-            const img = document.createElement('img');
-            img.src = `data:image/jpeg;base64,${data.image}`;
-
-            const caption = document.createElement('p');
-            caption.className = 'mt-2 mb-0';
-            caption.textContent = `Model: ${data.class_name} (ID ${data.track_id})`;
-
-            const analyzeBtn = document.createElement('button');
-            analyzeBtn.className = 'btn btn-sm btn-info analyze-button';
-            analyzeBtn.textContent = 'Analyze with AI';
-
-            const resultDiv = document.createElement('div');
-            resultDiv.className = 'analysis-result mt-2';
-
-            analyzeBtn.addEventListener('click', async () => {
-                analyzeBtn.disabled = true;
-                analyzeBtn.textContent = 'Analyzing...';
-                try {
-                    const res = await analyzeImage(data.image);
-                    const html = `
-                        <div class="analysis-details">
-                            <div class="ai-detection"><strong>AI:</strong> ${res.food}</div>
-                            <div class="confidence-bar-container">
-                                <div class="confidence-label">Confidence: ${res.confidence}%</div>
-                                <div class="progress" style="height:5px;">
-                                  <div class="progress-bar ${getConfidenceColorClass(res.confidence)}" 
-                                       style="width:${res.confidence}%"></div>
-                                </div>
-                            </div>
-                            <div class="comparison ${res.food.toLowerCase()===data.class_name.toLowerCase()?'text-success':'text-warning'}">
-                              ${res.food.toLowerCase()===data.class_name.toLowerCase()
-                                ? '<i class="fas fa-check"></i> Match'
-                                : '<i class="fas fa-exclaim"></i> Diff'}
-                            </div>
-                        </div>`;
-                    resultDiv.innerHTML = html;
-                } catch (e) {
-                    resultDiv.innerHTML = '<div class="text-danger">Analysis failed.</div>';
-                } finally {
-                    analyzeBtn.disabled = false;
-                    analyzeBtn.textContent = 'Analyze with AI';
-                }
-            });
-
-            div.append(img, caption, analyzeBtn, resultDiv);
-            container.insertBefore(div, container.firstChild);
-            while (container.children.length > 10) container.removeChild(container.lastChild);
-        }
-
         async function analyzeImage(base64Image) {
             const resp = await fetch('/analyze_image', {
                 method: 'POST',
@@ -328,6 +378,189 @@
             if (c >= 50) return 'bg-warning';
             return 'bg-danger';
         }
+
+        async function analyzeInventoryItem(item) {
+            try {
+                const resp = await fetch('/analyze_inventory', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ item })
+                });
+                
+                if (!resp.ok) throw await resp.json();
+                const data = await resp.json();
+                
+                // Find the inventory item's container
+                const list = document.getElementById('inventory-list');
+                const items = list.getElementsByClassName('inventory-item');
+                for (const itemDiv of items) {
+                    if (itemDiv.textContent.includes(item)) {
+                        // Remove any existing analysis results
+                        const existingResults = itemDiv.parentElement.querySelector('.analysis-results');
+                        if (existingResults) {
+                            existingResults.remove();
+                        }
+                        
+                        // Create new analysis results container
+                        const resultsDiv = document.createElement('div');
+                        resultsDiv.className = 'analysis-results';
+                        
+                        // Add each result
+                        data.results.forEach((result, index) => {
+                            const resultDiv = document.createElement('div');
+                            resultDiv.className = 'analysis-result-item';
+                            resultDiv.innerHTML = `
+                                <strong>Image ${index + 1}:</strong> ${result.food} 
+                                (${result.confidence}% confidence)
+                                <div class="progress" style="height:3px; margin-top:2px;">
+                                    <div class="progress-bar ${getConfidenceColorClass(result.confidence)}" 
+                                         style="width:${result.confidence}%"></div>
+                                </div>
+                            `;
+                            resultsDiv.appendChild(resultDiv);
+                        });
+                        
+                        itemDiv.parentElement.appendChild(resultsDiv);
+                        break;
+                    }
+                }
+            } catch (e) {
+                console.error('Error analyzing inventory:', e);
+            }
+        }
+
+        function getConfidenceClass(confidence) {
+            if (confidence >= 90) return 'confidence-high';
+            if (confidence >= 70) return 'confidence-medium';
+            return 'confidence-low';
+        }
+
+        function updateAIInventory(results) {
+            const aiInventoryPanel = document.querySelector('.ai-inventory-panel');
+            const aiInventoryList = document.getElementById('ai-inventory-list');
+            aiInventoryList.innerHTML = '';
+            
+            // Group results by AI-detected food
+            const groupedResults = {};
+            for (const [originalItem, itemResults] of Object.entries(results)) {
+                itemResults.forEach(result => {
+                    const food = result.food.toLowerCase();
+                    if (!groupedResults[food]) {
+                        groupedResults[food] = {
+                            confidence: result.confidence,
+                            originalItems: new Set(),
+                            images: []
+                        };
+                    }
+                    groupedResults[food].originalItems.add(originalItem);
+                    groupedResults[food].images.push(result);
+                });
+            }
+
+            // Create inventory items
+            for (const [food, data] of Object.entries(groupedResults)) {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = `ai-inventory-item ${food === 'unknown' ? 'unknown-item' : ''}`;
+                
+                const header = document.createElement('h4');
+                const confidenceBadge = document.createElement('span');
+                confidenceBadge.className = `confidence-badge ${getConfidenceClass(data.confidence)}`;
+                confidenceBadge.textContent = `${data.confidence}% confidence`;
+                
+                if (food === 'unknown') {
+                    header.innerHTML = `
+                        <span>Unknown Item</span>
+                        ${confidenceBadge.outerHTML}
+                    `;
+                    
+                    const inputDiv = document.createElement('div');
+                    inputDiv.className = 'unknown-item-input';
+                    inputDiv.innerHTML = `
+                        <input type="text" class="form-control" placeholder="What is this item?">
+                        <button class="btn btn-primary">Save</button>
+                    `;
+                    
+                    const saveBtn = inputDiv.querySelector('button');
+                    const input = inputDiv.querySelector('input');
+                    
+                    saveBtn.addEventListener('click', () => {
+                        const newName = input.value.trim();
+                        if (newName) {
+                            // Update the item name
+                            header.querySelector('span').textContent = newName;
+                            inputDiv.remove();
+                            itemDiv.classList.remove('unknown-item');
+                        }
+                    });
+                    
+                    itemDiv.appendChild(header);
+                    itemDiv.appendChild(inputDiv);
+                } else {
+                    header.innerHTML = `
+                        <span>${food}</span>
+                        ${confidenceBadge.outerHTML}
+                    `;
+                    itemDiv.appendChild(header);
+                }
+
+                // Add original detection info
+                const originalInfo = document.createElement('div');
+                originalInfo.className = 'original-detection';
+                originalInfo.innerHTML = `
+                    <small class="text-muted">
+                        Originally detected as: ${Array.from(data.originalItems).join(', ')}
+                    </small>
+                `;
+                itemDiv.appendChild(originalInfo);
+
+                // Add images
+                const imagesDiv = document.createElement('div');
+                imagesDiv.className = 'inventory-images mt-2';
+                data.images.forEach(result => {
+                    const img = document.createElement('img');
+                    img.className = 'inventory-image';
+                    img.src = `data:image/jpeg;base64,${result.image}`;
+                    img.alt = food;
+                    imagesDiv.appendChild(img);
+                });
+                itemDiv.appendChild(imagesDiv);
+
+                aiInventoryList.appendChild(itemDiv);
+            }
+            
+            // Show the AI inventory panel
+            aiInventoryPanel.style.display = 'block';
+        }
+
+        async function analyzeAllItems() {
+            const analyzeBtn = document.getElementById('analyze-all-btn');
+            analyzeBtn.disabled = true;
+            analyzeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
+            
+            try {
+                const resp = await fetch('/analyze_inventory', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+                
+                if (!resp.ok) throw await resp.json();
+                const data = await resp.json();
+                
+                // Update the AI-verified inventory
+                updateAIInventory(data.results);
+                
+            } catch (e) {
+                console.error('Error analyzing inventory:', e);
+                alert('Failed to analyze items');
+            } finally {
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerHTML = '<i class="fas fa-robot"></i> Analyze All Items';
+            }
+        }
+
+        // Add event listener for the analyze all button
+        document.getElementById('analyze-all-btn').addEventListener('click', analyzeAllItems);
     </script>
 
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
