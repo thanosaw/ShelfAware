@@ -4,6 +4,8 @@ import os
 import sys
 import contextlib
 from ultralytics import YOLO
+import logging
+import time
 
 # --------------------------------------------------------------------
 # CONFIGURATION
@@ -20,13 +22,15 @@ INTERESTED_CLASSES = []     # If empty, we detect all classes (except we still s
 # YOLO model (replace with your custom .pt file if needed)
 model = YOLO("yolov8n.pt")
 
-# Inventory as { label: count }
-inventory = {}
-
-# Track dictionary: { track_id: {...track_info...} }
-tracks = {}
+# Global state
+inventory = {}     # { label: {count: int, images: list, last_updated: float} }
+tracks = {}        # { track_id: { label, center, current_side, start_side,
+                   #               has_crossed_in, has_crossed_out, lost_frames,
+                   #               history: [(x,y,timestamp)], box } }
 next_track_id = 0  # increment when creating a new track
 
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -59,24 +63,29 @@ def print_inventory():
     if not inventory:
         print("  Empty")
     else:
+        for item, data in inventory.items():
         for item, count in inventory.items():
             print(f"  {item} x{count}")
     print()
 
 
 def add_to_inventory(label):
-    """Increment the count for a label in the inventory."""
+    """Add item to inventory with just the count."""
     if label not in inventory:
         inventory[label] = 0
     inventory[label] += 1
+    logger.info(f"Added {label} to inventory. Count: {inventory[label]}")
 
 
 def remove_from_inventory(label):
-    """Decrement the count for a label; remove if it hits zero."""
+    """Remove item from inventory with validation."""
     if label in inventory:
-        inventory[label] -= 1
-        if inventory[label] <= 0:
-            del inventory[label]
+        if inventory[label] > 0:
+            inventory[label] -= 1
+            logger.info(f"Removed {label} from inventory. Count: {inventory[label]}")
+            if inventory[label] <= 0:
+                del inventory[label]
+                logger.info(f"Removed {label} from inventory (empty)")
 
 
 def euclidean_distance(p1, p2):
