@@ -573,7 +573,7 @@
                 const header = document.createElement('h4');
                 const confidenceBadge = document.createElement('span');
                 confidenceBadge.className = `confidence-badge ${getConfidenceClass(data.confidence)}`;
-                confidenceBadge.textContent = `${data.confidence}% confidence`;
+                confidenceBadge.textContent = `${data.confidence} confidence`;
                 
                 if (food === 'unknown') {
                     header.innerHTML = `
@@ -612,7 +612,7 @@
                     `;
                     itemDiv.appendChild(header);
                 }
-
+/*
                 // Add original detection info
                 const originalInfo = document.createElement('div');
                 originalInfo.className = 'original-detection';
@@ -622,7 +622,7 @@
                     </small>
                 `;
                 itemDiv.appendChild(originalInfo);
-
+*/
                 // Add images
                 const imagesDiv = document.createElement('div');
                 imagesDiv.className = 'inventory-images mt-2';
@@ -766,7 +766,7 @@
                             
                             const expBadge = document.createElement('span');
                             expBadge.className = `expiration-badge ${expClass}`;
-                            expBadge.textContent = `${expInfo.days} days`;
+                            expBadge.textContent = `Expires in ${expInfo.days} days`;
                             expBadge.title = expInfo.notes || '';
                             
                             header.appendChild(expBadge);
