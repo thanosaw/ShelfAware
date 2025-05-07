@@ -6,6 +6,8 @@ from flask_socketio import SocketIO
 from ultralytics import YOLO          # used only for fallback object-ness
 import mediapipe as mp
 from openai import OpenAI
+import time
+
 
 # ------------------------------ CONSTANTS ----------------------------------
 BOUNDARY_Y            = 550           # y-coord of the red boundary line
@@ -44,6 +46,8 @@ mp_hands = mp.solutions.hands.Hands(
 # Inventory / tracking state
 inventory, tracks = {}, {}
 next_track_id     = itertools.count()      # generator: 0,1,2,…
+
+
 
 # --------------------------- HELPER FUNCS ----------------------------------
 def digital_zoom(frame, factor):
@@ -168,7 +172,11 @@ def generate_frames():
         logger.error("Could not open camera"); return
 
     last_emit = 0.0
-    while True:
+    start_time = time.time()
+    duration = 5
+
+    while time.time() - start_time  < duration:
+    
         ok, frame = cap.read()
         if not ok: break
 
@@ -196,6 +204,7 @@ def generate_frames():
         # ---------- Associate detections to existing tracks ----------------
         current_ids = set()
         for det in detections:
+            start_time = time.time()
             x1,y1,x2,y2 = det['box']
             cx, cy      = (x1+x2)/2, (y1+y2)/2
 
@@ -250,7 +259,10 @@ def generate_frames():
         _, buf = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
                + buf.tobytes() + b'\r\n')
+    socketio.emit('stop_stream')
     cap.release()
+    socketio.emit('analyzeInventoryItem')
+    generate_frames()
 
 # ------------------------------- ROUTES ------------------------------------
 @app.route('/')
@@ -298,7 +310,7 @@ def analyze_image():
         m = re.search(r'(\d+)%', text)
         conf = int(m.group(1)) if m else 90
 
-        return jsonify({'food': food, 'confidence': conf, 'raw': text})
+        return jsonify({'food': food, 'confidence': conf, 'image': img_data, 'raw': text})
 
     except Exception as e:
         logger.error(f"Error in analyze_image: {e}")
@@ -359,6 +371,7 @@ def analyze_inventory():
                 item_results.append({
                     'food': food,
                     'confidence': conf,
+                    'image': image,
                     'raw': text
                 })
             results[item] = item_results

@@ -224,7 +224,7 @@
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h3 class="mb-0">Current Inventory</h3>
                 <button id="analyze-all-btn" class="btn btn-primary">
-                    <i class="fas fa-robot"></i> Analyze All Items
+                    <i class="fas fa-robot"></i> Analyze Item
                 </button>
             </div>
             <ul id="inventory-list">
@@ -281,6 +281,12 @@
             if (data && data.items) {
                 updateDetectionLog(data.items);
             }
+        });
+        socket.on('stop_stream', () => {
+            stopStream(); 
+        });
+        socket.on('analyzeAllItems', () => {
+            analyzeAllItems(); 
         });
 
         // New: listen for inventory updates
@@ -558,6 +564,7 @@
                 analyzeBtn.innerHTML = '<i class="fas fa-robot"></i> Analyze All Items';
             }
         }
+
 
         // Add event listener for the analyze all button
         document.getElementById('analyze-all-btn').addEventListener('click', analyzeAllItems);
