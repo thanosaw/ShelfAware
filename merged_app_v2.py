@@ -6,7 +6,6 @@ from flask_socketio import SocketIO
 from ultralytics import YOLO          # used only for fallback object-ness
 import mediapipe as mp
 from openai import OpenAI
-<<<<<<< HEAD
 import time
 
 
@@ -44,14 +43,11 @@ mp_hands = mp.solutions.hands.Hands(
 )
 #test
 # OpenAI
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "api_key_here"))
+
 # Inventory / tracking state
 inventory, tracks = {}, {}
 next_track_id     = itertools.count()      # generator: 0,1,2,…
 
-<<<<<<< HEAD
-
-=======
 # Socket.io event handlers
 @socketio.on('connect')
 def handle_connect():
@@ -79,7 +75,6 @@ def emit_inventory():
         # Log the traceback for more detail
         import traceback
         logger.error(traceback.format_exc())
->>>>>>> main
 
 # Socket.io event handlers
 @socketio.on('connect')
@@ -414,6 +409,7 @@ def analyze_inventory():
                                 "What is this item? Provide a short, direct answer with just the item name. "
                                 "If it's not a food or drink item, respond with 'non-food item'. "
                                 "Format: <item name> (confidence: high/medium/low)"
+                                "Before adding a new item to the inventory, check if the snapshot is visually similar (>90%) to any item added in the last 2 seconds. If so ignore it"
                               )
                             },
                             { "type": "image_url",
@@ -519,11 +515,7 @@ IMPORTANT: Ensure your response is ONLY valid JSON that can be parsed, with no a
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-<<<<<<< HEAD
-    socketio.run(app, host='0.0.0.0', port=5001, debug=True)
-=======
     try:
-        socketio.run(app, host='0.0.0.0', port=5001, debug=True)
+        socketio.run(app, host='127.0.0.1', port=5001, debug=True)
     finally:
         pass
->>>>>>> main
