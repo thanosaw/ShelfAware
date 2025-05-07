@@ -2,8 +2,8 @@ flask==3.0.2
 flask-socketio==5.3.6
 eventlet
 opencv-python==4.9.0.80
-ultralytics==8.3.128
+ultralytics
 torch==2.2.0
 numpy==1.26.4
-openai
-mediapipe
+mediapipe==0.10.9
+openai==1.12.0

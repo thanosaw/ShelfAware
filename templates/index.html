@@ -208,6 +208,56 @@
             background-color: #fff3cd;
             color: #856404;
         }
+        /* Recipe and expiration styles */
+        .recipe-item {
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+        .recipe-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #28a745;
+        }
+        .recipe-ingredients {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .recipe-instructions {
+            font-size: 14px;
+        }
+        .recipe-image {
+            max-width: 100%;
+            height: auto;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        .expiration-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 8px;
+        }
+        .expiration-fresh {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .expiration-soon {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .expiration-expired {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .loading-spinner {
+            text-align: center;
+            padding: 20px;
+        }
     </style>
 </head>
 <body>
@@ -234,9 +284,20 @@
 
         <!-- AI-Verified Inventory -->
         <div class="ai-inventory-panel">
-            <h3>AI-Verified Inventory</h3>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3 class="mb-0">AI-Verified Inventory</h3>
+                <button id="get-recipes-btn" class="btn btn-success">
+                    <i class="fas fa-utensils"></i> Get Recipes & Expirations
+                </button>
+            </div>
             <div id="ai-inventory-list">
                 <!-- AI-verified items will appear here -->
+            </div>
+            <div id="recipes-section" class="mt-4" style="display: none;">
+                <h3>Suggested Recipes</h3>
+                <div id="recipes-list" class="list-group">
+                    <!-- Recipes will be listed here -->
+                </div>
             </div>
         </div>
 
@@ -250,9 +311,9 @@
     </div>
 
     <script>
-        var socket = io.connect('http://' + document.domain + ':5001', {
-            transports: ['websocket'],
-            upgrade: false,
+        // Socket.io setup with better debugging
+        const socket = io.connect('http://' + document.domain + ':' + (location.port || 5001), {
+            transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
@@ -264,12 +325,27 @@
         let lastDetectedItems = {};
 
         socket.on('connect', () => {
+            // Only update UI status without logging
             connectionStatus.textContent = 'Connected';
             connectionStatus.className = 'connected';
         });
+        
         socket.on('disconnect', () => {
+            // Only update UI status without logging
             connectionStatus.textContent = 'Disconnected';
             connectionStatus.className = 'disconnected';
+        });
+        
+        socket.on('connect_error', (error) => {
+            // Only log actual errors
+            console.error('Connection error:', error);
+            connectionStatus.textContent = 'Connection Error';
+            connectionStatus.className = 'disconnected';
+        });
+        
+        // Request an inventory update when connected
+        socket.on('connect', () => {
+            socket.emit('request_inventory');
         });
 
         document.getElementById("toggle-stream").addEventListener("click", () => {
@@ -290,36 +366,54 @@
         });
 
         // New: listen for inventory updates
-        socket.on('inventory_update', ({ inventory }) => {
+        socket.on('inventory_update', (data) => {
+            if (!data || !data.inventory) {
+                console.error('Invalid inventory data received:', data);
+                return;
+            }
+            
+            const inventory = data.inventory;
+            
             const list = document.getElementById('inventory-list');
             list.innerHTML = '';
+            
             // If empty
             if (Object.keys(inventory).length === 0) {
                 const li = document.createElement('li');
                 li.textContent = 'Empty';
                 list.appendChild(li);
-            } else {
-                for (const [item, data] of Object.entries(inventory)) {
-                    const li = document.createElement('li');
-                    const itemDiv = document.createElement('div');
-                    itemDiv.className = 'inventory-item';
-                    
-                    // Item name and count
-                    const itemText = document.createElement('span');
-                    itemText.textContent = `${item}: ${data.count}`;
-                    
-                    // Analyze all button
-                    const analyzeBtn = document.createElement('button');
-                    analyzeBtn.className = 'btn btn-sm btn-info analyze-all-btn';
-                    analyzeBtn.textContent = 'Analyze All';
-                    analyzeBtn.onclick = () => analyzeInventoryItem(item);
-                    
-                    // Images container
+                return;
+            }
+            
+            // Process each inventory item
+            for (const [item, data] of Object.entries(inventory)) {
+                const li = document.createElement('li');
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'inventory-item';
+                
+                // Item name and count
+                const itemText = document.createElement('span');
+                itemText.textContent = `${item}: ${data.count}`;
+                
+                // Analyze all button
+                const analyzeBtn = document.createElement('button');
+                analyzeBtn.className = 'btn btn-sm btn-info analyze-all-btn';
+                analyzeBtn.textContent = 'Analyze';
+                analyzeBtn.onclick = () => analyzeInventoryItem(item);
+                
+                itemDiv.appendChild(itemText);
+                itemDiv.appendChild(analyzeBtn);
+                li.appendChild(itemDiv);
+                
+                // Check if item has images and add them
+                if (data.images && Array.isArray(data.images) && data.images.length > 0) {
                     const imagesDiv = document.createElement('div');
                     imagesDiv.className = 'inventory-images';
                     
                     // Add each image
                     data.images.forEach((imgData, index) => {
+                        if (!imgData) return; // Skip null/undefined images
+                        
                         const img = document.createElement('img');
                         img.className = 'inventory-image';
                         img.src = `data:image/jpeg;base64,${imgData}`;
@@ -327,12 +421,13 @@
                         imagesDiv.appendChild(img);
                     });
                     
-                    itemDiv.appendChild(itemText);
-                    itemDiv.appendChild(analyzeBtn);
-                    li.appendChild(itemDiv);
-                    li.appendChild(imagesDiv);
-                    list.appendChild(li);
+                    // Only add the images div if it has children
+                    if (imagesDiv.children.length > 0) {
+                        li.appendChild(imagesDiv);
+                    }
                 }
+                
+                list.appendChild(li);
             }
         });
 
@@ -444,6 +539,12 @@
         function updateAIInventory(results) {
             const aiInventoryPanel = document.querySelector('.ai-inventory-panel');
             const aiInventoryList = document.getElementById('ai-inventory-list');
+            const recipesSection = document.getElementById('recipes-section');
+            
+            // Reset the recipe section
+            recipesSection.style.display = 'none';
+            document.getElementById('recipes-list').innerHTML = '';
+            
             aiInventoryList.innerHTML = '';
             
             // Group results by AI-detected food
@@ -467,6 +568,7 @@
             for (const [food, data] of Object.entries(groupedResults)) {
                 const itemDiv = document.createElement('div');
                 itemDiv.className = `ai-inventory-item ${food === 'unknown' ? 'unknown-item' : ''}`;
+                itemDiv.dataset.foodName = food; // Store food name for easier access
                 
                 const header = document.createElement('h4');
                 const confidenceBadge = document.createElement('span');
@@ -492,6 +594,8 @@
                     saveBtn.addEventListener('click', () => {
                         const newName = input.value.trim();
                         if (newName) {
+                            // Update the food name in dataset for recipe generation
+                            itemDiv.dataset.foodName = newName;
                             // Update the item name
                             header.querySelector('span').textContent = newName;
                             inputDiv.remove();
@@ -568,6 +672,135 @@
 
         // Add event listener for the analyze all button
         document.getElementById('analyze-all-btn').addEventListener('click', analyzeAllItems);
+
+        // Add event listener for the get recipes button
+        document.getElementById('get-recipes-btn').addEventListener('click', getRecipesAndExpirations);
+
+        async function getRecipesAndExpirations() {
+            const recipesBtn = document.getElementById('get-recipes-btn');
+            const aiInventoryList = document.getElementById('ai-inventory-list');
+            const recipesSection = document.getElementById('recipes-section');
+            const recipesList = document.getElementById('recipes-list');
+            
+            // Get all food items from AI inventory
+            const foodItems = [];
+            const foodElements = aiInventoryList.querySelectorAll('.ai-inventory-item');
+            
+            for (const el of foodElements) {
+                const foodName = el.querySelector('h4 span').textContent.trim();
+                if (foodName && foodName.toLowerCase() !== 'unknown') {
+                    foodItems.push(foodName);
+                }
+            }
+            
+            if (foodItems.length === 0) {
+                alert('No food items found in inventory to generate recipes.');
+                return;
+            }
+            
+            // Disable button and show loading
+            recipesBtn.disabled = true;
+            recipesBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            recipesList.innerHTML = '<div class="loading-spinner"><i class="fas fa-spinner fa-spin fa-2x"></i><p>Getting recipe ideas...</p></div>';
+            recipesSection.style.display = 'block';
+            
+            try {
+                const resp = await fetch('/get_recipes_and_expirations', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ items: foodItems })
+                });
+                
+                if (!resp.ok) throw await resp.json();
+                const data = await resp.json();
+                
+                // Update the UI with recipes
+                recipesList.innerHTML = '';
+                
+                if (data.recipes && data.recipes.length > 0) {
+                    data.recipes.forEach(recipe => {
+                        const recipeDiv = document.createElement('div');
+                        recipeDiv.className = 'recipe-item';
+                        
+                        // Highlight ingredients from inventory
+                        const highlightedIngredients = recipe.ingredients.map(ing => {
+                            const ingredient = ing.trim();
+                            // Check if this ingredient is in our inventory
+                            const isFromInventory = foodItems.some(item => 
+                                ingredient.toLowerCase().includes(item.toLowerCase())
+                            );
+                            
+                            return isFromInventory ? 
+                                `<span class="text-success font-weight-bold">${ingredient}</span>` : 
+                                ingredient;
+                        });
+                        
+                        recipeDiv.innerHTML = `
+                            <div class="recipe-title">${recipe.name}</div>
+                            <div class="recipe-ingredients">
+                                <strong>Ingredients:</strong> ${highlightedIngredients.join(', ')}
+                            </div>
+                            <div class="recipe-instructions">
+                                ${recipe.instructions}
+                            </div>
+                        `;
+                        recipesList.appendChild(recipeDiv);
+                    });
+                } else {
+                    recipesList.innerHTML = '<div class="alert alert-info">No recipes found for these ingredients.</div>';
+                }
+                
+                // Add expiration badges to each item
+                if (data.expirations) {
+                    for (const el of foodElements) {
+                        const foodName = el.querySelector('h4 span').textContent.trim();
+                        if (data.expirations[foodName]) {
+                            const header = el.querySelector('h4');
+                            
+                            // Remove existing expiration badge if any
+                            const existingBadge = header.querySelector('.expiration-badge');
+                            if (existingBadge) existingBadge.remove();
+                            
+                            const expInfo = data.expirations[foodName];
+                            const expClass = getExpirationClass(expInfo.days);
+                            
+                            const expBadge = document.createElement('span');
+                            expBadge.className = `expiration-badge ${expClass}`;
+                            expBadge.textContent = `${expInfo.days} days`;
+                            expBadge.title = expInfo.notes || '';
+                            
+                            header.appendChild(expBadge);
+                            
+                            // Add storage notes if available
+                            if (expInfo.notes) {
+                                // Remove existing notes if any
+                                const existingNotes = el.querySelector('.expiration-notes');
+                                if (existingNotes) existingNotes.remove();
+                                
+                                const notesDiv = document.createElement('div');
+                                notesDiv.className = 'expiration-notes mt-2 small font-italic text-muted';
+                                notesDiv.innerHTML = `<i class="fas fa-info-circle"></i> ${expInfo.notes}`;
+                                
+                                el.appendChild(notesDiv);
+                            }
+                        }
+                    }
+                }
+                
+            } catch (e) {
+                console.error('Error getting recipes:', e);
+                recipesList.innerHTML = `<div class="alert alert-danger">Error: ${e.message || 'Failed to get recipes'}</div>`;
+            } finally {
+                recipesBtn.disabled = false;
+                recipesBtn.innerHTML = '<i class="fas fa-utensils"></i> Get Recipes & Expirations';
+            }
+        }
+        
+        function getExpirationClass(days) {
+            if (days <= 0) return 'expiration-expired';
+            if (days <= 3) return 'expiration-soon';
+            return 'expiration-fresh';
+        }
     </script>
 
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>

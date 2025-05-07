@@ -42,7 +42,7 @@ python app.py
 
 3. Open your web browser and navigate to:
 ```
-http://127.0.0.1:5000
+http://127.0.0.1:5001
 ```
 
 4. Allow camera access when prompted by your browser.

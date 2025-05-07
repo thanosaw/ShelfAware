@@ -1,4 +1,4 @@
-import os, time, math, logging, base64, re, itertools
+import os, time, math, logging, base64, re, itertools, json
 import numpy as np
 import cv2
 from flask import Flask, render_template, Response, jsonify, request
@@ -6,6 +6,7 @@ from flask_socketio import SocketIO
 from ultralytics import YOLO          # used only for fallback object-ness
 import mediapipe as mp
 from openai import OpenAI
+<<<<<<< HEAD
 import time
 
 
@@ -18,9 +19,10 @@ MAX_TRACK_DISTANCE    = 200           # px radius to associate detections
 TRACK_HISTORY         = 10            # stored points for velocity calc
 EMIT_INTERVAL         = 0.5           # sec between detection emit
 SCREENSHOT_INTERVAL   = 1.0           # sec between screenshots
-PERSON_CLS_ID         = 0             # COCO id for “person”
+PERSON_CLS_ID         = 0             # COCO id for "person"
 CROP_SCALE = 4          # 1.0 = just the hand, 2.0 = double width/height
 CROP_MIN_PAD = 100         # absolute px pad if scale still ends up tiny
+INVENTORY_UPDATE_INTERVAL = 5.0  # seconds between inventory updates
 
 # ------------------------------ GLOBALS ------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -42,12 +44,70 @@ mp_hands = mp.solutions.hands.Hands(
 )
 #test
 # OpenAI
-
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "api_key_here"))
 # Inventory / tracking state
 inventory, tracks = {}, {}
 next_track_id     = itertools.count()      # generator: 0,1,2,…
 
+<<<<<<< HEAD
 
+=======
+# Socket.io event handlers
+@socketio.on('connect')
+def handle_connect():
+    logger.debug(f"Client connected: {request.sid}")
+    emit_inventory()  # Send initial inventory on connect
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.debug(f"Client disconnected: {request.sid}")
+
+@socketio.on('request_inventory')
+def handle_request_inventory():
+    logger.debug(f"Inventory request from client: {request.sid}")
+    emit_inventory()
+
+def emit_inventory():
+    """Emit inventory update with additional metadata."""
+    try:
+        socketio.emit('inventory_update', {
+            'inventory': inventory,
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        logger.error(f"Error emitting inventory update: {e}")
+        # Log the traceback for more detail
+        import traceback
+        logger.error(traceback.format_exc())
+>>>>>>> main
+
+# Socket.io event handlers
+@socketio.on('connect')
+def handle_connect():
+    logger.debug(f"Client connected: {request.sid}")
+    emit_inventory()  # Send initial inventory on connect
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.debug(f"Client disconnected: {request.sid}")
+
+@socketio.on('request_inventory')
+def handle_request_inventory():
+    logger.debug(f"Inventory request from client: {request.sid}")
+    emit_inventory()
+
+def emit_inventory():
+    """Emit inventory update with additional metadata."""
+    try:
+        socketio.emit('inventory_update', {
+            'inventory': inventory,
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        logger.error(f"Error emitting inventory update: {e}")
+        # Log the traceback for more detail
+        import traceback
+        logger.error(traceback.format_exc())
 
 # --------------------------- HELPER FUNCS ----------------------------------
 def digital_zoom(frame, factor):
@@ -87,10 +147,6 @@ def remove_from_inventory(label):
         logger.info(f"Removed {label}. Count: {inventory[label]['count']}")
         if inventory[label]['count'] <= 0:
             del inventory[label]
-
-def emit_inventory():                # socket helper
-    socketio.emit('inventory_update', {'inventory': inventory,
-                                       'timestamp': time.time()})
 
 def encode_frame_to_base64(frame):
     _, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
@@ -141,28 +197,42 @@ def update_track_side(tid, center, frame=None):
 def _snapshot_and_add(tr, frame):
     """Grab a roomy crop (hand + item), encode to base64, add to inventory."""
     if frame is None:
+        logger.warning("Frame is None, adding generic object without image")
         add_to_inventory('object')
         return
 
-    # original hand box
-    x1, y1, x2, y2 = map(int, tr['box'])
-    w  = x2 - x1
-    h  = y2 - y1
+    try:
+        # original hand box
+        x1, y1, x2, y2 = map(int, tr['box'])
+        w  = x2 - x1
+        h  = y2 - y1
 
-    # expand symmetrically around center
-    cx, cy = x1 + w/2, y1 + h/2
-    half_w = max(w * CROP_SCALE / 2, CROP_MIN_PAD)
-    half_h = max(h * CROP_SCALE / 2, CROP_MIN_PAD)
+        # expand symmetrically around center
+        cx, cy = x1 + w/2, y1 + h/2
+        half_w = max(w * CROP_SCALE / 2, CROP_MIN_PAD)
+        half_h = max(h * CROP_SCALE / 2, CROP_MIN_PAD)
 
-    nx1 = int(max(0,     cx - half_w))
-    ny1 = int(max(0,     cy - half_h))
-    nx2 = int(min(frame.shape[1], cx + half_w))
-    ny2 = int(min(frame.shape[0], cy + half_h))
+        nx1 = int(max(0,     cx - half_w))
+        ny1 = int(max(0,     cy - half_h))
+        nx2 = int(min(frame.shape[1], cx + half_w))
+        ny2 = int(min(frame.shape[0], cy + half_h))
 
-    crop = frame[ny1:ny2, nx1:nx2]
-    img64 = encode_frame_to_base64(crop) if crop.size else None
-    add_to_inventory('object', img64)
+        crop = frame[ny1:ny2, nx1:nx2]
+        if crop.size == 0:
+            logger.warning("Empty crop area, adding generic object without image")
+            add_to_inventory('object')
+            return
 
+        # Debug log the crop dimensions
+        logger.info(f"Crop dimensions: {crop.shape}")
+        
+        img64 = encode_frame_to_base64(crop)
+        add_to_inventory('object', img64)
+        logger.info("Successfully added object with image to inventory")
+    except Exception as e:
+        logger.error(f"Error in _snapshot_and_add: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 # ----------------------- MAIN VIDEO LOOP -----------------------------------
 def generate_frames():
@@ -197,7 +267,7 @@ def generate_frames():
                 for (x1,y1,x2,y2), conf, cls in zip(b.xyxy.cpu().tolist(),
                                                     b.conf.cpu().tolist(),
                                                     b.cls.int().cpu().tolist()):
-                    if cls == PERSON_CLS_ID:        # skip “person”
+                    if cls == PERSON_CLS_ID:        # skip "person"
                         continue
                     detections.append({'box':(x1,y1,x2,y2), 'conf':conf})
 
@@ -381,7 +451,79 @@ def analyze_inventory():
     except Exception as e:
         logger.error(f"Error in analyze_inventory: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/get_recipes_and_expirations', methods=['POST'])
+def get_recipes_and_expirations():
+    try:
+        data = request.json
+        food_items = data.get('items', [])
+        
+        if not food_items:
+            return jsonify({'error': 'No food items provided'}), 400
+        
+        # Format the items for the prompt
+        items_list = ", ".join(food_items)
+        
+        # Create the prompt for OpenAI
+        prompt = f"""Based on these food items: {items_list}
+
+1. Suggest 3 recipes that can be made using some or all of these ingredients. For each recipe include:
+   - Name
+   - Ingredients (indicate which ones are from the provided list)
+   - Brief cooking instructions
+
+2. Provide estimated shelf life information for each of these items:
+   - For each item, provide approximate days until expiration for a typical fresh item of this type
+   - Assume items were fresh when added to inventory
+
+Format your response as valid JSON with this structure:
+{{
+  "recipes": [
+    {{
+      "name": "Recipe Name",
+      "ingredients": ["ingredient1", "ingredient2", ...],
+      "instructions": "Step by step instructions"
+    }},
+    ...
+  ],
+  "expirations": {{
+    "item1": {{ "days": 5, "notes": "Store in refrigerator" }},
+    "item2": {{ "days": 7, "notes": "Keep in cool, dry place" }},
+    ...
+  }}
+}}
+
+IMPORTANT: Ensure your response is ONLY valid JSON that can be parsed, with no additional text."""
+
+        # Make the API call to OpenAI
+        response = client.chat.completions.create(
+            model="gpt-4.1", 
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            max_tokens=1500
+        )
+        
+        # Extract and parse the response
+        content = response.choices[0].message.content
+        result = json.loads(content)
+        
+        return jsonify(result)
+
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parse error: {e}")
+        return jsonify({'error': f'Failed to parse OpenAI response: {str(e)}'}), 500
+    except Exception as e:
+        logger.error(f"Error in get_recipes_and_expirations: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
+<<<<<<< HEAD
     socketio.run(app, host='0.0.0.0', port=5001, debug=True)
+=======
+    try:
+        socketio.run(app, host='0.0.0.0', port=5001, debug=True)
+    finally:
+        pass
+>>>>>>> main
