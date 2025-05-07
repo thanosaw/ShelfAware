@@ -325,18 +325,19 @@
         let lastDetectedItems = {};
 
         socket.on('connect', () => {
-            console.log('Socket connected!');
+            // Only update UI status without logging
             connectionStatus.textContent = 'Connected';
             connectionStatus.className = 'connected';
         });
         
         socket.on('disconnect', () => {
-            console.log('Socket disconnected!');
+            // Only update UI status without logging
             connectionStatus.textContent = 'Disconnected';
             connectionStatus.className = 'disconnected';
         });
         
         socket.on('connect_error', (error) => {
+            // Only log actual errors
             console.error('Connection error:', error);
             connectionStatus.textContent = 'Connection Error';
             connectionStatus.className = 'disconnected';
@@ -344,7 +345,6 @@
         
         // Request an inventory update when connected
         socket.on('connect', () => {
-            console.log('Requesting initial inventory');
             socket.emit('request_inventory');
         });
 
@@ -367,7 +367,6 @@
             }
             
             const inventory = data.inventory;
-            console.log('Received inventory update:', inventory);
             
             const list = document.getElementById('inventory-list');
             list.innerHTML = '';
@@ -795,30 +794,6 @@
             if (days <= 3) return 'expiration-soon';
             return 'expiration-fresh';
         }
-
-        // Function to manually request inventory updates
-        function requestInventoryUpdate() {
-            console.log('Manually requesting inventory update');
-            if (socket.connected) {
-                socket.emit('request_inventory');
-            } else {
-                console.log('Socket not connected, cannot request inventory');
-            }
-        }
-
-        // Request an inventory update every 5 seconds for the first minute
-        let updateCount = 0;
-        const initialUpdateInterval = setInterval(() => {
-            if (updateCount < 12) { // 12 * 5 seconds = 1 minute
-                requestInventoryUpdate();
-                updateCount++;
-            } else {
-                clearInterval(initialUpdateInterval);
-            }
-        }, 5000);
-
-        // Also request on page load after a short delay
-        setTimeout(requestInventoryUpdate, 1000);
     </script>
 
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>

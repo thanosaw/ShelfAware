@@ -20,7 +20,7 @@ SCREENSHOT_INTERVAL   = 1.0           # sec between screenshots
 PERSON_CLS_ID         = 0             # COCO id for "person"
 CROP_SCALE = 4          # 1.0 = just the hand, 2.0 = double width/height
 CROP_MIN_PAD = 100         # absolute px pad if scale still ends up tiny
-INVENTORY_UPDATE_INTERVAL = 0.5  # seconds between inventory updates
+INVENTORY_UPDATE_INTERVAL = 5.0  # seconds between inventory updates
 
 # ------------------------------ GLOBALS ------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -50,52 +50,21 @@ next_track_id     = itertools.count()      # generator: 0,1,2,…
 # Socket.io event handlers
 @socketio.on('connect')
 def handle_connect():
-    logger.info(f"Client connected: {request.sid}")
+    logger.debug(f"Client connected: {request.sid}")
     emit_inventory()  # Send initial inventory on connect
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    logger.info(f"Client disconnected: {request.sid}")
+    logger.debug(f"Client disconnected: {request.sid}")
 
 @socketio.on('request_inventory')
 def handle_request_inventory():
-    logger.info(f"Inventory request from client: {request.sid}")
+    logger.debug(f"Inventory request from client: {request.sid}")
     emit_inventory()
-
-# Periodic update thread
-update_thread = None
-stop_update_thread = threading.Event()
-
-def periodic_inventory_update():
-    """Periodically emit inventory updates regardless of video stream state."""
-    while not stop_update_thread.is_set():
-        try:
-            emit_inventory()
-            time.sleep(INVENTORY_UPDATE_INTERVAL)
-        except Exception as e:
-            logger.error(f"Error in periodic inventory update: {e}")
-
-def start_periodic_updates():
-    """Start the periodic inventory update thread."""
-    global update_thread
-    if update_thread is None or not update_thread.is_alive():
-        stop_update_thread.clear()
-        update_thread = threading.Thread(target=periodic_inventory_update)
-        update_thread.daemon = True
-        update_thread.start()
-
-def stop_periodic_updates():
-    """Stop the periodic inventory update thread."""
-    stop_update_thread.set()
-    if update_thread and update_thread.is_alive():
-        update_thread.join()
 
 def emit_inventory():
     """Emit inventory update with additional metadata."""
     try:
-        # Add debug logging
-        logger.info(f"Emitting inventory update with {len(inventory)} items")
-        
         socketio.emit('inventory_update', {
             'inventory': inventory,
             'timestamp': time.time()
@@ -508,8 +477,7 @@ IMPORTANT: Ensure your response is ONLY valid JSON that can be parsed, with no a
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    start_periodic_updates()
     try:
         socketio.run(app, host='0.0.0.0', port=5001, debug=True)
     finally:
-        stop_periodic_updates()
+        pass
