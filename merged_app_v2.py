@@ -1,27 +1,23 @@
 import os, time, math, logging, base64, re, itertools, json
-import numpy as np
-import cv2
+import numpy as np, cv2
 from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO
-from ultralytics import YOLO          # used only for fallback object-ness
+from ultralytics import YOLO
 import mediapipe as mp
 from openai import OpenAI
-import time
-
 
 # ------------------------------ CONSTANTS ----------------------------------
-BOUNDARY_Y            = 550           # y-coord of the red boundary line
-ZOOM_FACTOR           = 1.1           # digital zoom
-CONF_THRESHOLD        = 0.30          # YOLO conf
-MAX_LOST_FRAMES       = 5             # drop track after N missing frames
-MAX_TRACK_DISTANCE    = 200           # px radius to associate detections
-TRACK_HISTORY         = 10            # stored points for velocity calc
-EMIT_INTERVAL         = 0.5           # sec between detection emit
-SCREENSHOT_INTERVAL   = 1.0           # sec between screenshots
-PERSON_CLS_ID         = 0             # COCO id for "person"
-CROP_SCALE = 4          # 1.0 = just the hand, 2.0 = double width/height
-CROP_MIN_PAD = 100         # absolute px pad if scale still ends up tiny
-INVENTORY_UPDATE_INTERVAL = 5.0  # seconds between inventory updates
+VERTEX_Y              = 450           # y‑coord of parabola vertex (middle top)
+ZOOM_FACTOR           = 1.1
+CONF_THRESHOLD        = 0.30
+MAX_LOST_FRAMES       = 5
+MAX_TRACK_DISTANCE    = 200
+TRACK_HISTORY         = 10
+EMIT_INTERVAL         = 0.5
+PERSON_CLS_ID         = 0
+CROP_SCALE            = 4
+CROP_MIN_PAD          = 100
+INVENTORY_UPDATE_INTERVAL = 5.0
 
 # ------------------------------ GLOBALS ------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -31,313 +27,197 @@ app      = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet',
                     logger=True, engineio_logger=True)
 
-# YOLO object-ness model (class-agnostic)
-yolo_obj = YOLO("yolo11n.pt")         # auto-download on first run
-
-# MediaPipe Hands
+yolo_obj = YOLO("yolo11n.pt")                    # class‑agnostic fallback
 mp_hands = mp.solutions.hands.Hands(
-    max_num_hands=2,
-    model_complexity=0,
-    min_detection_confidence=0.35,
-    min_tracking_confidence=0.35
-)
-#test
-# OpenAI
+    max_num_hands=2, model_complexity=0,
+    min_detection_confidence=0.35, min_tracking_confidence=0.35)
 
-# Inventory / tracking state
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+
 inventory, tracks = {}, {}
-next_track_id     = itertools.count()      # generator: 0,1,2,…
+next_track_id     = itertools.count()
 
-# Socket.io event handlers
+# --------------------------- SOCKET HELPERS --------------------------------
 @socketio.on('connect')
-def handle_connect():
-    logger.debug(f"Client connected: {request.sid}")
-    emit_inventory()  # Send initial inventory on connect
-
+def _on_connect():  emit_inventory()
 @socketio.on('disconnect')
-def handle_disconnect():
-    logger.debug(f"Client disconnected: {request.sid}")
-
+def _on_disconnect(): pass
 @socketio.on('request_inventory')
-def handle_request_inventory():
-    logger.debug(f"Inventory request from client: {request.sid}")
-    emit_inventory()
+def _on_req_inv(): emit_inventory()
 
 def emit_inventory():
-    """Emit inventory update with additional metadata."""
-    try:
-        socketio.emit('inventory_update', {
-            'inventory': inventory,
-            'timestamp': time.time()
-        })
-    except Exception as e:
-        logger.error(f"Error emitting inventory update: {e}")
-        # Log the traceback for more detail
-        import traceback
-        logger.error(traceback.format_exc())
+    socketio.emit('inventory_update',
+                  {'inventory': inventory, 'timestamp': time.time()})
 
-# Socket.io event handlers
-@socketio.on('connect')
-def handle_connect():
-    logger.debug(f"Client connected: {request.sid}")
-    emit_inventory()  # Send initial inventory on connect
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    logger.debug(f"Client disconnected: {request.sid}")
-
-@socketio.on('request_inventory')
-def handle_request_inventory():
-    logger.debug(f"Inventory request from client: {request.sid}")
-    emit_inventory()
-
-def emit_inventory():
-    """Emit inventory update with additional metadata."""
-    try:
-        socketio.emit('inventory_update', {
-            'inventory': inventory,
-            'timestamp': time.time()
-        })
-    except Exception as e:
-        logger.error(f"Error emitting inventory update: {e}")
-        # Log the traceback for more detail
-        import traceback
-        logger.error(traceback.format_exc())
-
-# --------------------------- HELPER FUNCS ----------------------------------
-def digital_zoom(frame, factor):
-    h, w = frame.shape[:2]
-    nw, nh = int(w/factor), int(h/factor)
+# --------------------------- CV HELPERS ------------------------------------
+def digital_zoom(f, factor):
+    h, w = f.shape[:2]; nw, nh = int(w/factor), int(h/factor)
     x1, y1 = (w-nw)//2, (h-nh)//2
-    crop   = frame[y1:y1+nh, x1:x1+nw]
-    return cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
+    return cv2.resize(f[y1:y1+nh, x1:x1+nw], (w, h), cv2.INTER_LINEAR)
 
 def hands_in_frame(bgr):
-    """Return list of hand boxes [x1,y1,x2,y2]."""
-    rgb   = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    res   = mp_hands.process(rgb)
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    res = mp_hands.process(rgb)
     boxes = []
     if res.multi_hand_landmarks:
         h, w = bgr.shape[:2]
         for hand in res.multi_hand_landmarks:
-            xs = [lm.x for lm in hand.landmark]
-            ys = [lm.y for lm in hand.landmark]
+            xs = [lm.x for lm in hand.landmark]; ys = [lm.y for lm in hand.landmark]
             x1, y1, x2, y2 = min(xs)*w, min(ys)*h, max(xs)*w, max(ys)*h
             boxes.append((x1, y1, x2, y2))
     return boxes
 
-def add_to_inventory(label, image=None):
-    if label not in inventory:
-        inventory[label] = {'count': 0, 'images': [], 'last_updated': time.time()}
-    inventory[label]['count'] += 1
-    if image is not None:
-        inventory[label]['images'].append(image)
-    inventory[label]['last_updated'] = time.time()
-    logger.info(f"Added {label}. Count: {inventory[label]['count']}")
-
-def remove_from_inventory(label):
-    if label in inventory and inventory[label]['count'] > 0:
-        inventory[label]['count'] -= 1
-        inventory[label]['last_updated'] = time.time()
-        logger.info(f"Removed {label}. Count: {inventory[label]['count']}")
-        if inventory[label]['count'] <= 0:
-            del inventory[label]
-
-def encode_frame_to_base64(frame):
-    _, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+def encode_frame_to_base64(f):
+    _, buf = cv2.imencode('.jpg', f, [int(cv2.IMWRITE_JPEG_QUALITY),70])
     return base64.b64encode(buf).decode('utf-8')
 
-# ----------------------- TRACK-SIDE / VELOCITY -----------------------------
 def _velocity(hist):
     if len(hist) < 2: return 0
-    dx = hist[-1][0] - hist[0][0]
-    dy = hist[-1][1] - hist[0][1]
-    dt = hist[-1][2] - hist[0][2]
-    return 0 if dt == 0 else math.hypot(dx, dy)/dt
+    dx, dy = hist[-1][0]-hist[0][0], hist[-1][1]-hist[0][1]
+    dt     = hist[-1][2]-hist[0][2]
+    return 0 if dt==0 else math.hypot(dx,dy)/dt
 
-def update_track_side(tid, center, frame=None):
-    tr  = tracks[tid]
-    old = tr['current_side']
-    new = 'below' if center[1] > BOUNDARY_Y else 'above'
-    tr['center'] = center
-    tr['history'].append((*center, time.time()))
-    if len(tr['history']) > TRACK_HISTORY:
-        tr['history'].pop(0)
-    vel = _velocity(tr['history'])
+# --------------------------- PARABOLA UTILS --------------------------------
+def parabola_y(x, w, h):
+    """Return y of boundary parabola at pixel x given frame w,h."""
+    a = 4*(h - VERTEX_Y) / (w**2)                # a > 0 (concave‑up in img coords)
+    return VERTEX_Y + a*((x - w/2)**2)
 
-    if tr['start_side'] is None:
-        tr['start_side'] = new
-    tr['current_side'] = new
+def is_below_boundary(pt, w, h):
+    """True if (x,y) lies below the parabola."""
+    x, y = pt
+    return y > parabola_y(x, w, h)
 
-    # crossing into fridge
-    if old == 'above' and new == 'below' and not tr['has_crossed_in']:
-        if vel > 0:
-            _snapshot_and_add(tr, frame)
-            tr['has_crossed_in'] = True
-            socketio.emit('movement_event',
-                          {'type':'input','item':'object','velocity':vel,
-                           'timestamp':time.time()})
-            emit_inventory()
+# ----------------------- INVENTORY HELPERS ---------------------------------
+def add_to_inventory(label, image=None):
+    if label not in inventory:
+        inventory[label]={'count':0,'images':[],'last_updated':time.time()}
+    inventory[label]['count'] += 1
+    if image: inventory[label]['images'].append(image)
+    inventory[label]['last_updated']=time.time()
 
-    # crossing out of fridge
-    if old == 'below' and new == 'above' and not tr['has_crossed_out']:
-        if vel > 0:
-            remove_from_inventory('object')
-            tr['has_crossed_out'] = True
-            socketio.emit('movement_event',
-                          {'type':'output','item':'object','velocity':vel,
-                           'timestamp':time.time()})
-            emit_inventory()
+def remove_from_inventory(label):
+    if label in inventory and inventory[label]['count']>0:
+        inventory[label]['count']-=1
+        inventory[label]['last_updated']=time.time()
+        if inventory[label]['count']<=0: inventory.pop(label,None)
 
+# ----------------------- SNAPSHOT / TRACK SIDE -----------------------------
 def _snapshot_and_add(tr, frame):
-    """Grab a roomy crop (hand + item), encode to base64, add to inventory."""
-    if frame is None:
-        logger.warning("Frame is None, adding generic object without image")
-        add_to_inventory('object')
-        return
+    if frame is None: return add_to_inventory('object')
+    x1,y1,x2,y2 = map(int,tr['box']); w,h = x2-x1, y2-y1
+    cx,cy = x1+w/2, y1+h/2
+    hw = max(w*CROP_SCALE/2, CROP_MIN_PAD); hh = max(h*CROP_SCALE/2, CROP_MIN_PAD)
+    nx1,ny1 = int(max(0,cx-hw)), int(max(0,cy-hh))
+    nx2,ny2 = int(min(frame.shape[1],cx+hw)), int(min(frame.shape[0],cy+hh))
+    crop = frame[ny1:ny2, nx1:nx2]
+    add_to_inventory('object', encode_frame_to_base64(crop) if crop.size else None)
 
-    try:
-        # original hand box
-        x1, y1, x2, y2 = map(int, tr['box'])
-        w  = x2 - x1
-        h  = y2 - y1
+def update_track_side(tid, center, w, h, frame=None):
+    tr = tracks[tid]
+    old = tr['current_side']
+    new = 'below' if is_below_boundary(center, w, h) else 'above'
+    tr['center']=center
+    tr['history'].append((*center,time.time()))
+    if len(tr['history'])>TRACK_HISTORY: tr['history'].pop(0)
+    vel=_velocity(tr['history'])
 
-        # expand symmetrically around center
-        cx, cy = x1 + w/2, y1 + h/2
-        half_w = max(w * CROP_SCALE / 2, CROP_MIN_PAD)
-        half_h = max(h * CROP_SCALE / 2, CROP_MIN_PAD)
+    if tr['start_side'] is None: tr['start_side']=new
+    tr['current_side']=new
 
-        nx1 = int(max(0,     cx - half_w))
-        ny1 = int(max(0,     cy - half_h))
-        nx2 = int(min(frame.shape[1], cx + half_w))
-        ny2 = int(min(frame.shape[0], cy + half_h))
-
-        crop = frame[ny1:ny2, nx1:nx2]
-        if crop.size == 0:
-            logger.warning("Empty crop area, adding generic object without image")
-            add_to_inventory('object')
-            return
-
-        # Debug log the crop dimensions
-        logger.info(f"Crop dimensions: {crop.shape}")
-        
-        img64 = encode_frame_to_base64(crop)
-        add_to_inventory('object', img64)
-        logger.info("Successfully added object with image to inventory")
-    except Exception as e:
-        logger.error(f"Error in _snapshot_and_add: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+    if old=='above' and new=='below' and not tr['has_crossed_in']:
+        if vel>0:
+            _snapshot_and_add(tr,frame); tr['has_crossed_in']=True
+            socketio.emit('movement_event',
+                {'type':'input','item':'object','velocity':vel,'timestamp':time.time()})
+            emit_inventory()
+    if old=='below' and new=='above' and not tr['has_crossed_out']:
+        if vel>0:
+            remove_from_inventory('object'); tr['has_crossed_out']=True
+            socketio.emit('movement_event',
+                {'type':'output','item':'object','velocity':vel,'timestamp':time.time()})
+            emit_inventory()
 
 # ----------------------- MAIN VIDEO LOOP -----------------------------------
 def generate_frames():
-    global tracks
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        logger.error("Could not open camera"); return
-
-    last_emit = 0.0
-    start_time = time.time()
-    duration = 5
-
-    while time.time() - start_time  < duration:
-    
-        ok, frame = cap.read()
+    cap=cv2.VideoCapture(0)
+    if not cap.isOpened(): logger.error("Camera open failed"); return
+    last_emit=0.0
+    while True:
+        ok,frame=cap.read()
         if not ok: break
+        frame=digital_zoom(frame,ZOOM_FACTOR); h,w=frame.shape[:2]
 
-        frame = digital_zoom(frame, ZOOM_FACTOR)
-        h, w  = frame.shape[:2]
-
-        # ---------- Tier-1 : hand boxes ------------------------------------
-        detections = []
-        for (x1,y1,x2,y2) in hands_in_frame(frame):
-            detections.append({'box':(x1,y1,x2,y2), 'conf':1.0})
-
-        # ---------- Tier-2 : YOLO object-ness if no hands ------------------
-        if not detections:
-            res = yolo_obj(frame, conf=CONF_THRESHOLD,
-                           agnostic_nms=True, verbose=False)
+        # ---- detections ---------------------------------------------------
+        detections=[{'box':b,'conf':1.0} for b in hands_in_frame(frame)]
+        if not detections:                               # fallback YOLO
+            res=yolo_obj(frame,conf=CONF_THRESHOLD,agnostic_nms=True,verbose=False)
             if res and res[0].boxes is not None:
-                b = res[0].boxes
-                for (x1,y1,x2,y2), conf, cls in zip(b.xyxy.cpu().tolist(),
-                                                    b.conf.cpu().tolist(),
-                                                    b.cls.int().cpu().tolist()):
-                    if cls == PERSON_CLS_ID:        # skip "person"
-                        continue
-                    detections.append({'box':(x1,y1,x2,y2), 'conf':conf})
+                for (x1,y1,x2,y2),conf,cls in zip(res[0].boxes.xyxy.cpu().tolist(),
+                                                   res[0].boxes.conf.cpu().tolist(),
+                                                   res[0].boxes.cls.int().cpu().tolist()):
+                    if cls!=PERSON_CLS_ID:
+                        detections.append({'box':(x1,y1,x2,y2),'conf':conf})
 
-        # ---------- Associate detections to existing tracks ----------------
-        current_ids = set()
+        # ---- associate / update tracks -----------------------------------
+        current_ids=set()
         for det in detections:
-            start_time = time.time()
-            x1,y1,x2,y2 = det['box']
-            cx, cy      = (x1+x2)/2, (y1+y2)/2
-
-            # find nearest existing track
-            best_id, best_d = None, float('inf')
+            x1,y1,x2,y2=det['box']; cx,cy=(x1+x2)/2,(y1+y2)/2
+            best_id,best_d=None,float('inf')
             for tid,tr in tracks.items():
-                d = math.hypot(cx-tr['center'][0], cy-tr['center'][1])
-                if d < best_d and d < MAX_TRACK_DISTANCE:
-                    best_id, best_d = tid, d
-
-            if best_id is None:                     # create new track
-                tid = next(next_track_id)
-                tracks[tid] = {'label':'object','center':(cx,cy),
-                               'start_side':None,'current_side':None,
-                               'has_crossed_in':False,
-                               'has_crossed_out':False,'lost_frames':0,
-                               'box':(x1,y1,x2,y2),
-                               'history':[(cx,cy,time.time())],
-                               'confidence':det['conf']}
-            else:                                   # update existing
-                tid = best_id
-                tr  = tracks[tid]
-                tr.update({'center':(cx,cy), 'box':(x1,y1,x2,y2),
-                           'confidence':det['conf'], 'lost_frames':0})
+                d=math.hypot(cx-tr['center'][0],cy-tr['center'][1])
+                if d<best_d and d<MAX_TRACK_DISTANCE:
+                    best_id,best_d=tid,d
+            if best_id is None:
+                tid=next(next_track_id)
+                tracks[tid]={'label':'object','center':(cx,cy),
+                             'start_side':None,'current_side':None,
+                             'has_crossed_in':False,'has_crossed_out':False,
+                             'lost_frames':0,'box':(x1,y1,x2,y2),
+                             'history':[(cx,cy,time.time())],'confidence':det['conf']}
+            else:
+                tid=best_id; tracks[tid].update(
+                    {'center':(cx,cy),'box':(x1,y1,x2,y2),
+                     'confidence':det['conf'],'lost_frames':0})
             current_ids.add(tid)
-            update_track_side(tid, (cx,cy), frame)
-
-            # draw box / id
-            cv2.rectangle(frame,(int(x1),int(y1)),(int(x2),int(y2)),
-                          (0,255,0),2)
+            update_track_side(tid,(cx,cy),w,h,frame)
+            cv2.rectangle(frame,(int(x1),int(y1)),(int(x2),int(y2)),(0,255,0),2)
             cv2.putText(frame,f'ID:{tid}',(int(x1),int(y1)-8),
                         cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),2)
 
-        # ---------- age & purge lost tracks --------------------------------
+        # ---- purge lost tracks -------------------------------------------
         for tid in list(tracks):
             if tid not in current_ids:
-                tracks[tid]['lost_frames'] += 1
-                if tracks[tid]['lost_frames'] > MAX_LOST_FRAMES:
+                tracks[tid]['lost_frames']+=1
+                if tracks[tid]['lost_frames']>MAX_LOST_FRAMES:
                     del tracks[tid]
 
-        # ---------- draw boundary line & emit counts -----------------------
-        cv2.line(frame,(0,BOUNDARY_Y),(w,BOUNDARY_Y),(0,0,255),2)
+        # ---- draw boundary parabola --------------------------------------
+        pts=[(x,int(parabola_y(x,w,h))) for x in range(0,w,8)]
+        cv2.polylines(frame,[np.array(pts,np.int32)],False,(0,0,255),2)
 
-        now = time.time()
-        if now-last_emit >= EMIT_INTERVAL:
+        # ---- socket emits -------------------------------------------------
+        now=time.time()
+        if now-last_emit>=EMIT_INTERVAL:
             socketio.emit('detection_update',
-                           {'items':{'object':len(current_ids)},
-                            'timestamp':now})
-            last_emit = now
+                {'items':{'object':len(current_ids)},'timestamp':now})
+            last_emit=now
 
-        # ---------- stream frame ------------------------------------------
-        _, buf = cv2.imencode('.jpg', frame)
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-               + buf.tobytes() + b'\r\n')
-    socketio.emit('stop_stream')
+        # ---- stream multipart -------------------------------------------
+        _,buf=cv2.imencode('.jpg',frame)
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'+buf.tobytes()+b'\r\n')
     cap.release()
-    socketio.emit('analyzeAllItems')
 
 # ------------------------------- ROUTES ------------------------------------
 @app.route('/')
-def index():               return render_template('index.html')
+def index(): return render_template('index.html')
 
 @app.route('/video_feed')
-def video_feed():          return Response(generate_frames(),
-                                   mimetype='multipart/x-mixed-replace; boundary=frame')
+def video_feed(): return Response(generate_frames(),
+           mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# ---------- ChatGPT endpoints (unchanged from your script) -----------------
-# ... (retain your analyze_image and analyze_inventory endpoints here)
+# ---------- ChatGPT endpoints (unchanged from earlier script) -------------
+# ... keep your analyze_image, analyze_inventory, get_recipes_and_expirations
 
 @app.route('/analyze_image', methods=['POST'])
 def analyze_image():
@@ -409,7 +289,7 @@ def analyze_inventory():
                                 "What is this item? Provide a short, direct answer with just the item name. "
                                 "If it's not a food or drink item, respond with 'non-food item'. "
                                 "Format: <item name> (confidence: high/medium/low)"
-                                "Before adding a new item to the inventory, check if the snapshot is visually similar (>90%) to any item added in the last 2 seconds. If so ignore it"
+                                "Before adding a new item to the inventory, check if the snapshot is visually similar (>90%) to any item added in the last 3 seconds. If so ignore it"
                               )
                             },
                             { "type": "image_url",
@@ -513,9 +393,5 @@ IMPORTANT: Ensure your response is ONLY valid JSON that can be parsed, with no a
         return jsonify({'error': str(e)}), 500
 
 # ---------------------------------------------------------------------------
-
 if __name__ == '__main__':
-    try:
-        socketio.run(app, host='127.0.0.1', port=5001, debug=True)
-    finally:
-        pass
+    socketio.run(app, host='127.0.0.1', port=5001, debug=True)
