@@ -40,7 +40,7 @@ mp_hands = mp.solutions.hands.Hands(
     min_detection_confidence=0.35,
     min_tracking_confidence=0.35
 )
-
+#test
 # OpenAI
 
 # Inventory / tracking state
@@ -261,8 +261,7 @@ def generate_frames():
                + buf.tobytes() + b'\r\n')
     socketio.emit('stop_stream')
     cap.release()
-    socketio.emit('analyzeInventoryItem')
-    generate_frames()
+    socketio.emit('analyzeAllItems')
 
 # ------------------------------- ROUTES ------------------------------------
 @app.route('/')
