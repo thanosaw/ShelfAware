@@ -470,7 +470,13 @@
                 body: JSON.stringify({ image: base64Image })
             });
             if (!resp.ok) throw await resp.json();
-            return await resp.json();
+            const data = await resp.json();            // data.items → list
+        
+            // quick demo: just log each detected name & confidence
+            data.items.forEach(it => {
+                console.log(`GPT saw: ${it.name} (${Math.round(it.confidence*100)}%)`);
+            });
+            return data;                               // caller can use .items array
         }
 
         function getConfidenceColorClass(c) {
