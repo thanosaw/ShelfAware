@@ -25,6 +25,11 @@ EMIT_INTERVAL     = 0.5
 PERSON_CLS_ID     = 0
 CROP_SCALE        = 4
 CROP_MIN_PAD      = 100
+# --- confidence gates -------------------------------------------------
+NEAR_HAND_DIST   = 120      # px – centre‑to‑centre to call it “in hand”
+CONF_NEAR_HAND   = 0.15     # accept weak box if it’s near a hand
+CONF_SOLO_OBJECT = 0.35     # stricter when object crosses alone
+
 
 # ------------------------------ GLOBALS ------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -198,13 +203,36 @@ def generate_frames():
         hand_dets=dedup
 
         # ----------------- 2. detect all items via YOLO -------------------
-        item_dets=[]
-        yolo=yolo_obj(frame_zoom,conf=CONF_THRESHOLD,agnostic_nms=True,verbose=False)
+        hand_centres = [(d["cx"], d["cy"]) for d in hand_dets]   # for later test
+
+
+        # --------------- 2.5  YOLO object pass with adaptive thresholds ----------
+        item_dets = []
+
+        # run once with the *lowest* threshold so nothing is missed
+        yolo = yolo_obj(frame_zoom,
+                        conf=min(CONF_NEAR_HAND, CONF_SOLO_OBJECT),
+                        agnostic_nms=True,
+                        verbose=False)
+
         if yolo and yolo[0].boxes is not None:
-            for (x1,y1,x2,y2),cls in zip(yolo[0].boxes.xyxy.cpu().tolist(),
-                                         yolo[0].boxes.cls.int().cpu().tolist()):
-                if cls!=PERSON_CLS_ID:
-                    item_dets.append({"box":(x1,y1,x2,y2)})
+            for (x1,y1,x2,y2), conf, cls in zip(
+                    yolo[0].boxes.xyxy.cpu().tolist(),
+                    yolo[0].boxes.conf.cpu().tolist(),
+                    yolo[0].boxes.cls.int().cpu().tolist()):
+
+                if cls == PERSON_CLS_ID:          # skip people
+                    continue
+
+                # decide which gate applies
+                cx, cy = (x1+x2)/2, (y1+y2)/2
+                near = any(math.hypot(cx-hx, cy-hy) <= NEAR_HAND_DIST
+                        for (hx,hy) in hand_centres)
+
+                thresh = CONF_NEAR_HAND if near else CONF_SOLO_OBJECT
+                if conf >= thresh:
+                    item_dets.append({"box": (x1, y1, x2, y2)})
+
 
         # ----------------- 3. update hand tracks --------------------------
         cur_h=set()
