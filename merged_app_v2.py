@@ -11,6 +11,10 @@ from ultralytics import YOLO
 import mediapipe as mp
 from openai import OpenAI
 import subprocess
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # ------------------------------ CONSTANTS ----------------------------------
 VERTEX_Y          = 450
@@ -433,6 +437,89 @@ def clear_inventory():
     emit_inventory()                 # push empty current inventory
     socketio.emit("ai_inventory_cleared")   # tell UI to hide AI panel
     return jsonify({"status": "cleared"})
+
+@app.route('/update_inventory_count', methods=['POST'])
+def update_inventory_count():
+    try:
+        data = request.json
+        item = data.get('item', '').lower()  # Convert to lowercase
+        delta = data.get('delta', 0)
+        
+        if not item:
+            return jsonify({'error': 'Item name is required'}), 400
+            
+        # Find all matching items in inventory (case-insensitive)
+        matching_items = [itm for itm in inventory_items if itm["label"].lower() == item]
+        if not matching_items:
+            return jsonify({'error': 'Item not found in inventory'}), 404
+            
+        # Update count for all matching items
+        new_count = 0
+        for itm in matching_items:
+            if not itm.get("pending", False):  # Only count non-pending items
+                new_count += 1
+        
+        # Apply delta
+        if delta > 0:
+            # Add new items
+            for _ in range(delta):
+                inventory_items.append({
+                    "id": uuid.uuid4().hex,
+                    "label": item,
+                    "pending": False,
+                    "direction": "in",
+                    "time": time.time(),
+                    "image": None  # Add image field as None
+                })
+                new_count += 1
+        elif delta < 0:
+            # Remove items
+            to_remove = min(abs(delta), new_count)
+            for _ in range(to_remove):
+                # Find and remove a non-pending item
+                for i, itm in enumerate(inventory_items):
+                    if itm["label"].lower() == item and not itm.get("pending", False):
+                        inventory_items.pop(i)
+                        new_count -= 1
+                        break
+        
+        # Emit updated inventory
+        emit_inventory()
+        
+        return jsonify({
+            'success': True,
+            'new_count': new_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating inventory count: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/remove_inventory_item', methods=['POST'])
+def remove_inventory_item():
+    try:
+        data = request.json
+        item = data.get('item', '').lower()  # Convert to lowercase
+        
+        if not item:
+            return jsonify({'error': 'Item name is required'}), 400
+            
+        # Remove all matching items
+        initial_length = len(inventory_items)
+        inventory_items[:] = [itm for itm in inventory_items if itm["label"].lower() != item]
+        
+        if len(inventory_items) == initial_length:
+            return jsonify({'error': 'Item not found in inventory'}), 404
+            
+        # Emit updated inventory
+        emit_inventory()
+        socketio.emit('ai_inventory_cleared')
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        logger.error(f"Error removing inventory item: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 # ---------------------------------------------------------------------------
 if __name__=="__main__":

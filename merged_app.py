@@ -10,6 +10,10 @@ from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO
 from ultralytics import YOLO
 from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Constants for computer vision
 BOUNDARY_Y = 550            # y-coordinate of the "door" line

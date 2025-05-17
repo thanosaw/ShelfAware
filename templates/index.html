@@ -171,6 +171,7 @@
             background-color: #f8f9fa;
             border-radius: 4px;
             border: 1px solid #eee;
+            position: relative;
         }
         .ai-inventory-item h4 {
             margin-bottom: 10px;
@@ -258,6 +259,26 @@
             text-align: center;
             padding: 20px;
         }
+        .inventory-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .count-control {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .count-control button {
+            padding: 2px 8px;
+            font-size: 12px;
+        }
+        .count-display {
+            min-width: 30px;
+            text-align: center;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -328,6 +349,7 @@
         const connectionStatus = document.getElementById('connection-status');
         let isStreaming = false;
         let lastDetectedItems = {};
+        let manualInventory = {};
 
         socket.on('connect', () => {
             // Only update UI status without logging
@@ -567,7 +589,8 @@
                         groupedResults[food] = {
                             confidence: result.confidence,
                             originalItems: new Set(),
-                            images: []
+                            images: [],
+                            count: 1
                         };
                     }
                     groupedResults[food].originalItems.add(originalItem);
@@ -585,6 +608,12 @@
                 const confidenceBadge = document.createElement('span');
                 confidenceBadge.className = `confidence-badge ${getConfidenceClass(data.confidence)}`;
                 confidenceBadge.textContent = `${data.confidence} confidence`;
+                
+                // Add remove button
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'btn btn-sm btn-danger';
+                removeBtn.innerHTML = '<i class="fas fa-trash"></i>';
+                removeBtn.onclick = () => removeInventoryItem(food);
                 
                 if (food === 'unknown') {
                     header.innerHTML = `
@@ -611,6 +640,8 @@
                             header.querySelector('span').textContent = newName;
                             inputDiv.remove();
                             itemDiv.classList.remove('unknown-item');
+                            // Add inventory controls after renaming
+                            addInventoryControls(itemDiv, newName, data.count);
                         }
                     });
                     
@@ -622,18 +653,10 @@
                         ${confidenceBadge.outerHTML}
                     `;
                     itemDiv.appendChild(header);
+                    // Add inventory controls
+                    addInventoryControls(itemDiv, food, data.count);
                 }
-/*
-                // Add original detection info
-                const originalInfo = document.createElement('div');
-                originalInfo.className = 'original-detection';
-                originalInfo.innerHTML = `
-                    <small class="text-muted">
-                        Originally detected as: ${Array.from(data.originalItems).join(', ')}
-                    </small>
-                `;
-                itemDiv.appendChild(originalInfo);
-*/
+                
                 // Add images
                 const imagesDiv = document.createElement('div');
                 imagesDiv.className = 'inventory-images mt-2';
@@ -651,6 +674,94 @@
             
             // Show the AI inventory panel
             aiInventoryPanel.style.display = 'block';
+        }
+
+        function addInventoryControls(itemDiv, foodName, initialCount) {
+            const controlsDiv = document.createElement('div');
+            controlsDiv.className = 'inventory-controls';
+            
+            const countControl = document.createElement('div');
+            countControl.className = 'count-control';
+            
+            const decreaseBtn = document.createElement('button');
+            decreaseBtn.className = 'btn btn-sm btn-outline-secondary';
+            decreaseBtn.innerHTML = '<i class="fas fa-minus"></i>';
+            decreaseBtn.onclick = () => updateItemCount(foodName, -1);
+            
+            const countDisplay = document.createElement('span');
+            countDisplay.className = 'count-display';
+            countDisplay.textContent = initialCount;
+            
+            const increaseBtn = document.createElement('button');
+            increaseBtn.className = 'btn btn-sm btn-outline-secondary';
+            increaseBtn.innerHTML = '<i class="fas fa-plus"></i>';
+            increaseBtn.onclick = () => updateItemCount(foodName, 1);
+            
+            countControl.appendChild(decreaseBtn);
+            countControl.appendChild(countDisplay);
+            countControl.appendChild(increaseBtn);
+            
+            controlsDiv.appendChild(countControl);
+            
+            itemDiv.appendChild(controlsDiv);
+        }
+
+        async function updateItemCount(foodName, delta) {
+            try {
+                const resp = await fetch('/update_inventory_count', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        item: foodName,
+                        delta: delta
+                    })
+                });
+                
+                if (!resp.ok) throw await resp.json();
+                const data = await resp.json();
+                
+                // Update the count display
+                const itemDiv = document.querySelector(`.ai-inventory-item[data-food-name="${foodName}"]`);
+                if (itemDiv) {
+                    const countDisplay = itemDiv.querySelector('.count-display');
+                    if (countDisplay) {
+                        countDisplay.textContent = data.new_count;
+                    }
+                    
+                    // If count is 0, remove the item
+                    if (data.new_count <= 0) {
+                        itemDiv.remove();
+                    }
+                }
+            } catch (e) {
+                console.error('Error updating item count:', e);
+                alert('Failed to update item count');
+            }
+        }
+
+        async function removeInventoryItem(foodName) {
+            if (!confirm(`Remove ${foodName} from inventory?`)) return;
+            
+            try {
+                const resp = await fetch('/remove_inventory_item', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        item: foodName
+                    })
+                });
+                
+                if (!resp.ok) throw await resp.json();
+                
+                // Remove the item from the UI
+                const itemDiv = document.querySelector(`.ai-inventory-item[data-food-name="${foodName}"]`);
+                if (itemDiv) {
+                    itemDiv.remove();
+                }
+            } catch (e) {
+                console.error('Error removing item:', e);
+                alert('Failed to remove item');
+            }   
         }
 
         async function analyzeAllItems() {
@@ -680,7 +791,6 @@
             }
         }
 
-
         // Add event listener for the analyze all button
         document.getElementById('analyze-all-btn').addEventListener('click', analyzeAllItems);
 
@@ -689,20 +799,11 @@
 
         async function getRecipesAndExpirations() {
             const recipesBtn = document.getElementById('get-recipes-btn');
-            const aiInventoryList = document.getElementById('ai-inventory-list');
             const recipesSection = document.getElementById('recipes-section');
             const recipesList = document.getElementById('recipes-list');
             
-            // Get all food items from AI inventory
-            const foodItems = [];
-            const foodElements = aiInventoryList.querySelectorAll('.ai-inventory-item');
-            
-            for (const el of foodElements) {
-                const foodName = el.querySelector('h4 span').textContent.trim();
-                if (foodName && foodName.toLowerCase() !== 'unknown') {
-                    foodItems.push(foodName);
-                }
-            }
+            // Get all food items from our local inventory
+            const foodItems = Object.keys(manualInventory).filter(item => manualInventory[item] > 0);
             
             if (foodItems.length === 0) {
                 alert('No food items found in inventory to generate recipes.');
@@ -736,7 +837,6 @@
                         // Highlight ingredients from inventory
                         const highlightedIngredients = recipe.ingredients.map(ing => {
                             const ingredient = ing.trim();
-                            // Check if this ingredient is in our inventory
                             const isFromInventory = foodItems.some(item => 
                                 ingredient.toLowerCase().includes(item.toLowerCase())
                             );
@@ -761,43 +861,6 @@
                     recipesList.innerHTML = '<div class="alert alert-info">No recipes found for these ingredients.</div>';
                 }
                 
-                // Add expiration badges to each item
-                if (data.expirations) {
-                    for (const el of foodElements) {
-                        const foodName = el.querySelector('h4 span').textContent.trim();
-                        if (data.expirations[foodName]) {
-                            const header = el.querySelector('h4');
-                            
-                            // Remove existing expiration badge if any
-                            const existingBadge = header.querySelector('.expiration-badge');
-                            if (existingBadge) existingBadge.remove();
-                            
-                            const expInfo = data.expirations[foodName];
-                            const expClass = getExpirationClass(expInfo.days);
-                            
-                            const expBadge = document.createElement('span');
-                            expBadge.className = `expiration-badge ${expClass}`;
-                            expBadge.textContent = `Expires in ${expInfo.days} days`;
-                            expBadge.title = expInfo.notes || '';
-                            
-                            header.appendChild(expBadge);
-                            
-                            // Add storage notes if available
-                            if (expInfo.notes) {
-                                // Remove existing notes if any
-                                const existingNotes = el.querySelector('.expiration-notes');
-                                if (existingNotes) existingNotes.remove();
-                                
-                                const notesDiv = document.createElement('div');
-                                notesDiv.className = 'expiration-notes mt-2 small font-italic text-muted';
-                                notesDiv.innerHTML = `<i class="fas fa-info-circle"></i> ${expInfo.notes}`;
-                                
-                                el.appendChild(notesDiv);
-                            }
-                        }
-                    }
-                }
-                
             } catch (e) {
                 console.error('Error getting recipes:', e);
                 recipesList.innerHTML = `<div class="alert alert-danger">Error: ${e.message || 'Failed to get recipes'}</div>`;
@@ -807,7 +870,7 @@
             }
         }
 
-                // ---- Clear Inventory button ----
+        // ---- Clear Inventory button ----
         document.getElementById('clear-inventory-btn').addEventListener('click', async () => {
             if (!confirm('Really clear the entire inventory?')) return;
 
@@ -829,7 +892,68 @@
             document.querySelector('.ai-inventory-panel').style.display = 'none';
         });
 
-        
+        function addManualItem() {
+            const nameInput = document.getElementById('manual-item-name');
+            const countInput = document.getElementById('manual-item-count');
+            
+            const itemName = nameInput.value.trim();
+            const count = parseInt(countInput.value) || 1;
+            
+            if (!itemName) {
+                alert('Please enter an item name');
+                return;
+            }
+            
+            // Add to our local inventory
+            if (!manualInventory[itemName]) {
+                manualInventory[itemName] = 0;
+            }
+            manualInventory[itemName] += count;
+            
+            // Clear the form
+            nameInput.value = '';
+            countInput.value = '1';
+            toggleManualItemForm();
+            
+            // Update the UI
+            updateInventoryDisplay();
+        }
+
+        function updateInventoryDisplay() {
+            const aiInventoryList = document.getElementById('ai-inventory-list');
+            
+            // Clear existing items
+            aiInventoryList.innerHTML = '';
+            
+            // Add each item from our inventory
+            for (const [itemName, count] of Object.entries(manualInventory)) {
+                if (count <= 0) continue;
+                
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'ai-inventory-item';
+                itemDiv.dataset.foodName = itemName.toLowerCase();
+                
+                const header = document.createElement('h4');
+                header.innerHTML = `<span>${itemName}</span>`;
+                
+                itemDiv.appendChild(header);
+                addInventoryControls(itemDiv, itemName, count);
+                
+                aiInventoryList.appendChild(itemDiv);
+            }
+        }
+
+        function updateItemCount(foodName, delta) {
+            if (!manualInventory[foodName]) {
+                manualInventory[foodName] = 0;
+            }
+            
+            manualInventory[foodName] = Math.max(0, manualInventory[foodName] + delta);
+            
+            // Update the UI
+            updateInventoryDisplay();
+        }
+
         function getExpirationClass(days) {
             if (days <= 0) return 'expiration-expired';
             if (days <= 3) return 'expiration-soon';
