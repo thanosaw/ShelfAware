@@ -45,7 +45,7 @@ socketio = SocketIO(
 model = YOLO("yolo11n.pt")
 
 # OpenAI client (ensure OPENAI_API_KEY is set in your env)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "your_api_key_here"))
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Global state
 inventory = {}     # { label: {count: int, images: list, last_updated: float} }

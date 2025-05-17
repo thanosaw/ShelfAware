@@ -36,8 +36,8 @@ menu = {
 # Global variable for the camera
 camera = cv2.VideoCapture(0)
 
-# Update the OpenAI client initialization (remove the old OPENAI_API_KEY constant)
-client = OpenAI(api_key="api_key")
+# OpenAI client (ensure OPENAI_API_KEY is set in your env)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def encode_frame_to_base64(frame):
     """Convert an OpenCV frame to base64 string with compression"""

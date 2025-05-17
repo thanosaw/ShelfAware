@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # ---------------------------------------------------------------------------
 #  Fusion fridge‑tracker: hands + YOLO item tracker + GPT identification
@@ -11,6 +10,7 @@ from flask_socketio import SocketIO
 from ultralytics import YOLO
 import mediapipe as mp
 from openai import OpenAI
+import subprocess
 
 # ------------------------------ CONSTANTS ----------------------------------
 VERTEX_Y          = 450
@@ -20,16 +20,26 @@ MAX_LOST_FRAMES   = 5
 MAX_TRACK_DIST    = 200      # hand–hand & item–item association radius
 HAND_ITEM_DIST    = 150      # hand–item fusion radius
 TRACK_HISTORY     = 10
-STABLE_FRAMES     = 3        # min frames before item track is “stable”
+STABLE_FRAMES     = 3        # min frames before item track is "stable"
 EMIT_INTERVAL     = 0.5
 PERSON_CLS_ID     = 0
 CROP_SCALE        = 4
 CROP_MIN_PAD      = 100
 # --- confidence gates -------------------------------------------------
-NEAR_HAND_DIST   = 120      # px – centre‑to‑centre to call it “in hand”
-CONF_NEAR_HAND   = 0.15     # accept weak box if it’s near a hand
+NEAR_HAND_DIST   = 120      # px – centre‑to‑centre to call it "in hand"
+CONF_NEAR_HAND   = 0.15     # accept weak box if it's near a hand
 CONF_SOLO_OBJECT = 0.35     # stricter when object crosses alone
 
+# Sound file paths
+ADD_SOUND = "sounds/add_item.mp3"
+REMOVE_SOUND = "sounds/remove_item.mp3"
+
+def play_sound(sound_file):
+    """Play a sound file using afplay (macOS) in a non-blocking way"""
+    try:
+        subprocess.Popen(['afplay', sound_file])
+    except Exception as e:
+        logger.error(f"Failed to play sound {sound_file}: {e}")
 
 # ------------------------------ GLOBALS ------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -43,7 +53,7 @@ yolo_obj = YOLO("yolov8n.pt")
 mp_hands = mp.solutions.hands.Hands(max_num_hands=2, model_complexity=0,
                                     min_detection_confidence=0.45,
                                     min_tracking_confidence=0.45)
-client    = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --------------------------- TRACK STATE -----------------------------------
 hand_tracks  = {}
@@ -116,7 +126,8 @@ def add_placeholder(direction,img_bgr,track_hash):
     emit_inventory()
 
 def finalize_in(label,itm):
-    itm.update({"label":label,"pending":False,"direction":"in"}); emit_inventory()
+    itm.update({"label":label,"pending":False,"direction":"in"})
+    emit_inventory()
 
 def finalize_out(label,itm):
     best,best_s=None,0
@@ -141,14 +152,19 @@ def update_hand_side(tid,center,w,h,frame):
 
     # ----- crossing detection --------------------------------------------
     if prev=="above" and new=="below" and v>2 and not tr["flag"]:
+        logger.info("Detected potential item entry - checking for nearby items")
         # look for nearby stable item track
         near=[it for it in item_tracks.values()
               if math.hypot(center[0]-it["center"][0], center[1]-it["center"][1])<HAND_ITEM_DIST
               and it["stable"]]
         if near:
+            logger.info("Found nearby item - playing add sound")
             crop=big_crop(near[0]["box"],frame)
             add_placeholder("in",crop,dhash(crop))
+            play_sound(ADD_SOUND)  # Play sound immediately when item enters
             tr["flag"]=True
+        else:
+            logger.info("No nearby items found for entry")
     if prev=="below" and new=="above" and v<-2 and not tr["flag"]:
         near=[it for it in item_tracks.values()
               if math.hypot(center[0]-it["center"][0], center[1]-it["center"][1])<HAND_ITEM_DIST
@@ -156,6 +172,7 @@ def update_hand_side(tid,center,w,h,frame):
         if near:
             crop=big_crop(near[0]["box"],frame)
             add_placeholder("out",crop,dhash(crop))
+            play_sound(REMOVE_SOUND)  # Play sound immediately when item exits
             tr["flag"]=True
     # reset flag when object returns to original side
     if prev!=new and abs(v)<1: tr["flag"]=False
@@ -194,7 +211,7 @@ def generate_frames():
 
         # ----------------- 1. detect hands --------------------------------
         hand_dets=[{"box":b} for b in hands_in_frame(frame_zoom)]
-        # remove dup hand boxes within 200 px
+        # remove dup hand boxes within 200 px
         dedup=[]
         for d in hand_dets:
             cx,cy=((d["box"][0]+d["box"][2])/2,(d["box"][1]+d["box"][3])/2)
