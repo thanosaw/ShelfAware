@@ -450,10 +450,8 @@ def update_inventory_count():
             
         # Find all matching items in inventory (case-insensitive)
         matching_items = [itm for itm in inventory_items if itm["label"].lower() == item]
-        if not matching_items:
-            return jsonify({'error': 'Item not found in inventory'}), 404
-            
-        # Update count for all matching items
+        
+        # Count non-pending items
         new_count = 0
         for itm in matching_items:
             if not itm.get("pending", False):  # Only count non-pending items

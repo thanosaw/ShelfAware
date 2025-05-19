@@ -163,7 +163,7 @@
             border: 1px solid #ddd;
             border-radius: 5px;
             text-align: left;
-            display: none; /* Hidden by default, shown after analysis */
+            display: block;
         }
         .ai-inventory-item {
             padding: 10px;
@@ -279,6 +279,26 @@
             text-align: center;
             font-weight: bold;
         }
+        /* Add missing item form styles */
+        .missing-item-form {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            border: 1px dashed #28a745;
+        }
+        .missing-item-form h4 {
+            color: #28a745;
+            margin-bottom: 15px;
+        }
+        .missing-item-inputs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .missing-item-inputs input[type="number"] {
+            width: 80px;
+        }
     </style>
 </head>
 <body>
@@ -295,9 +315,6 @@
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h3 class="mb-0">Current Inventory</h3>
                 <div>
-                    <button id="analyze-all-btn" class="btn btn-primary mr-2">
-                        <i class="fas fa-robot"></i> Analyze Item
-                    </button>
                     <button id="clear-inventory-btn" class="btn btn-danger">
                         <i class="fas fa-trash"></i> Clear Inventory
                     </button>
@@ -311,14 +328,40 @@
         <!-- AI-Verified Inventory -->
         <div class="ai-inventory-panel">
             <div class="d-flex justify-content-between align-items-center mb-3">
-                <h3 class="mb-0">AI-Verified Inventory</h3>
-                <button id="get-recipes-btn" class="btn btn-success">
-                    <i class="fas fa-utensils"></i> Get Recipes & Expirations
-                </button>
+                <h3 class="mb-0">Inventory</h3>
+                <div>
+                    <button id="analyze-all-btn" class="btn btn-primary mr-2">
+                        <i class="fas fa-robot"></i> Analyze Item
+                    </button>
+                    <button id="get-recipes-btn" class="btn btn-success">
+                        <i class="fas fa-utensils"></i> Get Recipes & Expirations
+                    </button>
+                </div>
             </div>
             <div id="ai-inventory-list">
                 <!-- AI-verified items will appear here -->
+                <div class="text-center text-muted py-3" id="empty-inventory-message">
+                    No items in your inventory yet. Add items manually below or use the Analyze function.
+                </div>
             </div>
+            
+            <!-- Missing Item Form - renamed to be more general -->
+            <div class="missing-item-form">
+                <h4><i class="fas fa-plus-circle"></i> Add Items to Inventory</h4>
+                <p class="text-muted small mb-3">
+                    <i class="fas fa-info-circle"></i> Please describe items as specifically as possible 
+                    (e.g., "red apple" instead of just "apple" or "whole milk" instead of just "milk") 
+                    to get better recipe recommendations and detection. 
+                </p>
+                <div class="missing-item-inputs">
+                    <input type="text" id="missing-item-name" class="form-control" placeholder="Specific item name (e.g., red apple, whole milk)">
+                    <input type="number" id="missing-item-count" class="form-control" value="1" min="1">
+                    <button id="add-missing-item-btn" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Add
+                    </button>
+                </div>
+            </div>
+            
             <div id="recipes-section" class="mt-4" style="display: none;">
                 <h3>Suggested Recipes</h3>
                 <div id="recipes-list" class="list-group">
@@ -349,7 +392,6 @@
         const connectionStatus = document.getElementById('connection-status');
         let isStreaming = false;
         let lastDetectedItems = {};
-        let manualInventory = {};
 
         socket.on('connect', () => {
             // Only update UI status without logging
@@ -573,6 +615,7 @@
             const aiInventoryPanel = document.querySelector('.ai-inventory-panel');
             const aiInventoryList = document.getElementById('ai-inventory-list');
             const recipesSection = document.getElementById('recipes-section');
+            const emptyMessage = document.getElementById('empty-inventory-message');
             
             // Reset the recipe section
             recipesSection.style.display = 'none';
@@ -596,6 +639,19 @@
                     groupedResults[food].originalItems.add(originalItem);
                     groupedResults[food].images.push(result);
                 });
+            }
+
+            // Hide empty message if we have results
+            if (Object.keys(groupedResults).length > 0) {
+                if (emptyMessage) emptyMessage.style.display = 'none';
+            } else {
+                // If no results, add the empty message back
+                aiInventoryList.innerHTML = `
+                    <div class="text-center text-muted py-3" id="empty-inventory-message">
+                        No items in your inventory yet. Add items manually below or use the Analyze function.
+                    </div>
+                `;
+                return;
             }
 
             // Create inventory items
@@ -708,6 +764,24 @@
 
         async function updateItemCount(foodName, delta) {
             try {
+                // First update the UI immediately for better user experience
+                const itemDiv = document.querySelector(`.ai-inventory-item[data-food-name="${foodName}"]`);
+                if (itemDiv) {
+                    const countDisplay = itemDiv.querySelector('.count-display');
+                    if (countDisplay) {
+                        // Get current count and update it locally
+                        const currentCount = parseInt(countDisplay.textContent) || 0;
+                        const newCount = Math.max(0, currentCount + delta);
+                        countDisplay.textContent = newCount;
+                        
+                        // If count is 0, remove the item from UI
+                        if (newCount <= 0) {
+                            itemDiv.remove();
+                        }
+                    }
+                }
+                
+                // Then send update to backend
                 const resp = await fetch('/update_inventory_count', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -717,25 +791,28 @@
                     })
                 });
                 
-                if (!resp.ok) throw await resp.json();
-                const data = await resp.json();
-                
-                // Update the count display
-                const itemDiv = document.querySelector(`.ai-inventory-item[data-food-name="${foodName}"]`);
-                if (itemDiv) {
-                    const countDisplay = itemDiv.querySelector('.count-display');
-                    if (countDisplay) {
-                        countDisplay.textContent = data.new_count;
-                    }
+                // If backend request succeeds, update with server count
+                if (resp.ok) {
+                    const data = await resp.json();
                     
-                    // If count is 0, remove the item
-                    if (data.new_count <= 0) {
+                    // Update the count display with server-provided count
+                    const itemDiv = document.querySelector(`.ai-inventory-item[data-food-name="${foodName}"]`);
+                    if (itemDiv && data.new_count > 0) {
+                        const countDisplay = itemDiv.querySelector('.count-display');
+                        if (countDisplay) {
+                            countDisplay.textContent = data.new_count;
+                        }
+                    } else if (data.new_count <= 0 && itemDiv) {
+                        // If server count is 0 or less, remove the item
                         itemDiv.remove();
                     }
+                } else {
+                    // Log error but don't alert the user
+                    console.error('Backend error updating item count:', await resp.text());
                 }
             } catch (e) {
+                // Log error but don't alert the user
                 console.error('Error updating item count:', e);
-                alert('Failed to update item count');
             }
         }
 
@@ -802,8 +879,10 @@
             const recipesSection = document.getElementById('recipes-section');
             const recipesList = document.getElementById('recipes-list');
             
-            // Get all food items from our local inventory
-            const foodItems = Object.keys(manualInventory).filter(item => manualInventory[item] > 0);
+            // Get all food items from our AI inventory panel instead of manualInventory
+            const foodItems = Array.from(
+                document.querySelectorAll('.ai-inventory-item')
+            ).map(item => item.dataset.foodName).filter(Boolean);
             
             if (foodItems.length === 0) {
                 alert('No food items found in inventory to generate recipes.');
@@ -878,8 +957,15 @@
                 const resp = await fetch('/clear_inventory', { method: 'POST' });
                 if (!resp.ok) throw await resp.json();
                 // local UI clean‑up (server will also emit fresh inventory_update)
-                document.getElementById('ai-inventory-list').innerHTML = '';
-                document.querySelector('.ai-inventory-panel').style.display = 'none';
+                document.getElementById('ai-inventory-list').innerHTML = `
+                    <div class="text-center text-muted py-3" id="empty-inventory-message">
+                        No items in your inventory yet. Add items manually below or use the Analyze function.
+                    </div>
+                `;
+                
+                // Clear the missing item form inputs
+                document.getElementById('missing-item-name').value = '';
+                document.getElementById('missing-item-count').value = '1';
             } catch (e) {
                 console.error('Clear inventory failed:', e);
                 alert('Failed to clear inventory');
@@ -888,8 +974,15 @@
 
         // optional: if another client clears inventory we hide AI panel automatically
         socket.on('ai_inventory_cleared', () => {
-            document.getElementById('ai-inventory-list').innerHTML = '';
-            document.querySelector('.ai-inventory-panel').style.display = 'none';
+            document.getElementById('ai-inventory-list').innerHTML = `
+                <div class="text-center text-muted py-3" id="empty-inventory-message">
+                    No items in your inventory yet. Add items manually below or use the Analyze function.
+                </div>
+            `;
+            
+            // Clear the missing item form inputs
+            document.getElementById('missing-item-name').value = '';
+            document.getElementById('missing-item-count').value = '1';
         });
 
         function addManualItem() {
@@ -943,21 +1036,108 @@
             }
         }
 
-        function updateItemCount(foodName, delta) {
-            if (!manualInventory[foodName]) {
-                manualInventory[foodName] = 0;
-            }
-            
-            manualInventory[foodName] = Math.max(0, manualInventory[foodName] + delta);
-            
-            // Update the UI
-            updateInventoryDisplay();
-        }
-
         function getExpirationClass(days) {
             if (days <= 0) return 'expiration-expired';
             if (days <= 3) return 'expiration-soon';
             return 'expiration-fresh';
+        }
+
+        // Add handler for adding missing items
+        document.getElementById('add-missing-item-btn').addEventListener('click', addMissingItem);
+
+        // Add enter key handler for the item name input
+        document.getElementById('missing-item-name').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addMissingItem();
+            }
+        });
+
+        // Also add for the count input
+        document.getElementById('missing-item-count').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addMissingItem();
+            }
+        });
+
+        function addMissingItem() {
+            const nameInput = document.getElementById('missing-item-name');
+            const countInput = document.getElementById('missing-item-count');
+            
+            const itemName = nameInput.value.trim().toLowerCase();
+            const count = parseInt(countInput.value) || 1;
+            
+            if (!itemName) {
+                alert('Please enter an item name');
+                return;
+            }
+            
+            // Hide recipes section if visible
+            const recipesSection = document.getElementById('recipes-section');
+            recipesSection.style.display = 'none';
+            document.getElementById('recipes-list').innerHTML = '';
+            
+            // Hide empty message
+            const emptyMessage = document.getElementById('empty-inventory-message');
+            if (emptyMessage) emptyMessage.style.display = 'none';
+            
+            // Check if item already exists
+            const existingItem = document.querySelector(`.ai-inventory-item[data-food-name="${itemName}"]`);
+            
+            if (existingItem) {
+                // Item exists, just update the count via backend
+                updateItemCount(itemName, count);
+            } else {
+                // Create new item in UI first
+                const aiInventoryList = document.getElementById('ai-inventory-list');
+                
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'ai-inventory-item';
+                itemDiv.dataset.foodName = itemName;
+                
+                const header = document.createElement('h4');
+                header.innerHTML = `<span>${itemName}</span> <span class="badge badge-secondary">Manual</span>`;
+                
+                itemDiv.appendChild(header);
+                
+                // Create initial controls with the count (will be updated by backend response)
+                const controlsDiv = document.createElement('div');
+                controlsDiv.className = 'inventory-controls';
+                
+                const countControl = document.createElement('div');
+                countControl.className = 'count-control';
+                
+                const decreaseBtn = document.createElement('button');
+                decreaseBtn.className = 'btn btn-sm btn-outline-secondary';
+                decreaseBtn.innerHTML = '<i class="fas fa-minus"></i>';
+                decreaseBtn.onclick = () => updateItemCount(itemName, -1);
+                
+                const countDisplay = document.createElement('span');
+                countDisplay.className = 'count-display';
+                countDisplay.textContent = count; // Initialize with local count
+                
+                const increaseBtn = document.createElement('button');
+                increaseBtn.className = 'btn btn-sm btn-outline-secondary';
+                increaseBtn.innerHTML = '<i class="fas fa-plus"></i>';
+                increaseBtn.onclick = () => updateItemCount(itemName, 1);
+                
+                countControl.appendChild(decreaseBtn);
+                countControl.appendChild(countDisplay);
+                countControl.appendChild(increaseBtn);
+                
+                controlsDiv.appendChild(countControl);
+                itemDiv.appendChild(controlsDiv);
+                
+                aiInventoryList.appendChild(itemDiv);
+                
+                // Then update the backend
+                updateItemCount(itemName, count);
+            }
+            
+            // Clear inputs
+            nameInput.value = '';
+            countInput.value = '1';
         }
     </script>
 
