@@ -114,12 +114,21 @@ def bulk_add(label:str, qty:int):
             "image": None
         })
 
-def emit_inventory():
-    agg=defaultdict(lambda:{"count":0,"images":[]})
+def emit_inventory(source=None):
+    """Aggregate items then push to every client.
+
+    `source` is an optional string: e.g. "camera", "receipt", "clear".
+    """
+    agg = defaultdict(lambda: {"count": 0, "images": []})
     for it in inventory_items:
-        agg[it["label"]]["count"]+=1
-        if it["image"]: agg[it["label"]]["images"].append(it["image"])
-    socketio.emit("inventory_update",{"inventory":agg,"timestamp":time.time()})
+        agg[it["label"]]["count"] += 1
+        if it["image"]:
+            agg[it["label"]]["images"].append(it["image"])
+
+    socketio.emit("inventory_update",
+                  {"inventory": agg,
+                   "timestamp": time.time(),
+                   "source": source})   # <‑‑ always present, can be None
 
 @socketio.on("connect")
 def _on_connect(): emit_inventory()
@@ -449,7 +458,7 @@ IMPORTANT: Ensure your response is ONLY valid JSON that can be parsed, with no a
 def clear_inventory():
     """Wipe both stocked and pending items, then notify the UI."""
     inventory_items.clear()          # forget everything
-    emit_inventory()                 # push empty current inventory
+    emit_inventory(source="clear")                 # push empty current inventory
     socketio.emit("ai_inventory_cleared")   # tell UI to hide AI panel
     return jsonify({"status": "cleared"})
 
@@ -490,7 +499,7 @@ def upload_receipt():
         for it in items:
             bulk_add(it["name"].lower().strip(), int(it.get("qty",1)))
 
-        emit_inventory()
+        emit_inventory(source="receipt")
         return jsonify({"items": items})
 
     except Exception as e:

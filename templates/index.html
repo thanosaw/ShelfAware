@@ -508,6 +508,24 @@
                 
                 list.appendChild(li);
             }
+
+            if (data.source === 'receipt') {
+                const aiResults = {};
+                Object.entries(inventory).forEach(([label, info]) => {
+                    const rec = {
+                        food       : label,
+                        confidence : 100,
+                        image      : (info.images && info.images.length)
+                                        ? info.images[0]
+                                        : null
+                    };
+                    if (!aiResults[label]) aiResults[label] = [];
+                    for (let i = 0; i < info.count; i++) {
+                        aiResults[label].push(rec);   // push once per unit
+                    }
+                });
+                updateAIInventory(aiResults);          // <- already defined earlier
+            }
         });
 
         function startStream() {
