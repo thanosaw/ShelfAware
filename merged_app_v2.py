@@ -12,6 +12,9 @@ import mediapipe as mp
 from openai import OpenAI
 import subprocess
 from dotenv import load_dotenv
+from PIL import Image
+import pytesseract, io, base64
+
 
 # Load environment variables
 load_dotenv()
@@ -99,6 +102,18 @@ def hands_in_frame(bgr):
     return boxes
 
 # --------------------------- INVENTORY SOCKET ------------------------------
+def bulk_add(label:str, qty:int):
+    """Add *qty* copies of *label* (already lowercase)."""
+    for _ in range(max(1, qty)):
+        inventory_items.append({
+            "id": uuid.uuid4().hex,
+            "label": label,
+            "pending": False,
+            "direction": "in",
+            "time": time.time(),
+            "image": None
+        })
+
 def emit_inventory():
     agg=defaultdict(lambda:{"count":0,"images":[]})
     for it in inventory_items:
@@ -437,6 +452,51 @@ def clear_inventory():
     emit_inventory()                 # push empty current inventory
     socketio.emit("ai_inventory_cleared")   # tell UI to hide AI panel
     return jsonify({"status": "cleared"})
+
+# ---------- RECEIPT OCR & INVENTORY UPDATE ---------------------------------
+@app.route("/upload_receipt", methods=["POST"])
+def upload_receipt():
+    """
+    Body  : { "image" : "<base64‑jpeg‑or‑png>" }
+    Return: { "items": [ {"name":"milk", "qty":2}, ... ] }
+    """
+    try:
+        b64 = request.json.get("image")
+        if not b64:
+            return jsonify({"error": "No image"}), 400
+
+        img = Image.open(io.BytesIO(base64.b64decode(b64.split(",")[-1])))
+        raw_text = pytesseract.image_to_string(img)
+
+        # Ask GPT to turn messy OCR into structured grocery lines
+        prompt = (
+            "Below is raw OCR text from a grocery receipt.\n"
+            "Extract a JSON array called 'items' where each entry has "
+            "'name' (lower‑case, no brand codes) and 'qty' (integer, "
+            "default 1 if missing).  Ignore prices, totals, loyalty text, "
+            "coupons, taxes, etc.\n\nOCR:\n```" + raw_text + "```"
+        )
+
+        gpt = client.chat.completions.create(
+            model="gpt-4o-mini",              # fast & cheap, or gpt‑3.5‑turbo
+            messages=[{"role":"user","content":prompt}],
+            response_format={"type": "json_object"},
+            max_tokens=400
+        )
+        parsed = json.loads(gpt.choices[0].message.content)
+        items  = parsed.get("items", [])
+
+        # update inventory
+        for it in items:
+            bulk_add(it["name"].lower().strip(), int(it.get("qty",1)))
+
+        emit_inventory()
+        return jsonify({"items": items})
+
+    except Exception as e:
+        logger.error(f"receipt upload: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route('/update_inventory_count', methods=['POST'])
 def update_inventory_count():

@@ -299,6 +299,7 @@
         .missing-item-inputs input[type="number"] {
             width: 80px;
         }
+        #receipt-drop.drag   { background:#e8f7ff; border-color:#17a2b8;}
     </style>
 </head>
 <body>
@@ -369,6 +370,15 @@
                 </div>
             </div>
         </div>
+
+        <!-- Receipt upload -->
+        <div class="mt-4 p-4 border rounded" id="receipt-drop"
+        style="background:#fafafa; border-style:dashed; cursor:pointer;">
+        <h4><i class="fas fa-receipt"></i> Drag &amp; drop a receipt here
+        or click to choose a file</h4>
+        <small class="text-muted">Accepted: JPG / PNG</small>
+        </div>
+
 
         <!-- Detection Log -->
         <div class="detection-log mt-4">
@@ -1144,5 +1154,55 @@
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
     <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+    <script>
+        /* ---------- receipt uploader ---------- */
+        const drop = document.getElementById("receipt-drop");
+        
+        drop.addEventListener("dragover", e => {
+            e.preventDefault(); drop.classList.add("drag");
+        });
+        drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+        drop.addEventListener("click", () => {
+            const inp=document.createElement("input");
+            inp.type="file"; inp.accept="image/*";
+            inp.onchange = () => handleFiles(inp.files);
+            inp.click();
+        });
+        drop.addEventListener("drop", e => {
+            e.preventDefault(); drop.classList.remove("drag");
+            handleFiles(e.dataTransfer.files);
+        });
+        
+        function handleFiles(files){
+            if(!files.length) return;
+            const f = files[0];
+            const rdr = new FileReader();
+            rdr.onload = () => uploadReceipt(rdr.result);
+            rdr.readAsDataURL(f);
+        }
+        
+        async function uploadReceipt(b64){
+            drop.innerHTML = '<i class="fas fa-spinner fa-spin"></i> parsing…';
+            try{
+                const r = await fetch("/upload_receipt",{
+                    method:"POST",
+                    headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify({image:b64})
+                });
+                if(!r.ok) throw await r.text();
+                const js = await r.json();
+                drop.innerHTML = `<span class="text-success">
+                    added ${js.items.length} line‑items from receipt ✔︎</span>`;
+                // server will emit inventory_update, nothing else to do
+            }catch(e){
+                console.error(e);
+                drop.innerHTML = '<span class="text-danger">receipt failed ❌</span>';
+                setTimeout(()=>drop.innerHTML =
+                    '<h4><i class="fas fa-receipt"></i> Drag & drop a receipt here<br>or click to choose a file</h4><small class="text-muted">Accepted: JPG / PNG</small>',3000);
+            }
+        }
+        </script>
+        
 </body>
 </html>
