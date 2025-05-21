@@ -61,6 +61,8 @@ mp_hands = mp.solutions.hands.Hands(max_num_hands=2, model_complexity=0,
                                     min_detection_confidence=0.45,
                                     min_tracking_confidence=0.45)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_CMD")
+assert pytesseract.pytesseract.tesseract_cmd, "TESSERACT_CMD is not set!"
 
 # --------------------------- TRACK STATE -----------------------------------
 hand_tracks  = {}
@@ -474,7 +476,11 @@ def upload_receipt():
         if not b64:
             return jsonify({"error": "No image"}), 400
 
-        img = Image.open(io.BytesIO(base64.b64decode(b64.split(",")[-1])))
+        if not b64 or "base64," not in b64:
+            return jsonify({"error": "Invalid or missing base64 image"}), 400
+
+        img_bytes = base64.b64decode(b64.split("base64,")[-1])
+        img = Image.open(io.BytesIO(img_bytes))
         raw_text = pytesseract.image_to_string(img)
 
         # Ask GPT to turn messy OCR into structured grocery lines
