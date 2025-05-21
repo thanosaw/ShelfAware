@@ -21,8 +21,8 @@ VERTEX_Y          = 450
 ZOOM_FACTOR       = 1.1
 CONF_THRESHOLD    = 0.35
 MAX_LOST_FRAMES   = 5
-MAX_TRACK_DIST    = 200      # hand–hand & item–item association radius
-HAND_ITEM_DIST    = 150      # hand–item fusion radius
+MAX_TRACK_DIST    = 250      # hand–hand & item–item association radius
+HAND_ITEM_DIST    = 250      # hand–item fusion radius
 TRACK_HISTORY     = 10
 STABLE_FRAMES     = 3        # min frames before item track is "stable"
 EMIT_INTERVAL     = 0.5
@@ -31,8 +31,8 @@ CROP_SCALE        = 4
 CROP_MIN_PAD      = 100
 # --- confidence gates -------------------------------------------------
 NEAR_HAND_DIST   = 120      # px – centre‑to‑centre to call it "in hand"
-CONF_NEAR_HAND   = 0.15     # accept weak box if it's near a hand
-CONF_SOLO_OBJECT = 0.35     # stricter when object crosses alone
+CONF_NEAR_HAND   = 0.25     # accept weak box if it's near a hand
+CONF_SOLO_OBJECT = 0.4     # stricter when object crosses alone
 
 # Sound file paths
 ADD_SOUND = "sounds/add_item.mp3"
