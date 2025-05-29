@@ -317,7 +317,10 @@
 <body>
     <div id="connection-status" class="disconnected">Disconnected</div>
     <div class="container">
-        <h1 class="mb-4">Food Detection System</h1>
+        <div class="d-flex justify-content-center align-items-center mb-4 text-center">
+            <img src="{{ url_for('static', filename='shelfaware_icononly.PNG') }}" alt="ShelfAware Logo" style="height: 50px; margin-right: 5px;">
+            <h1 class="mb-0 align-self-center">ShelfAware</h1>
+        </div>
         <button id="toggle-stream" class="btn btn-primary">Start Detection</button>
         <div>
             <img id="video-feed" src="" style="display: none;">
