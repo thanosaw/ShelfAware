@@ -69,7 +69,7 @@ hand_tracks  = {}
 item_tracks  = {}
 next_hand_id = itertools.count()
 next_item_id = itertools.count()
-inventory_items = []
+inventory_items = []  # Initialize as empty list
 
 # --------------------------- UTILITY FUNCS ---------------------------------
 def b64encode_img(bgr):
@@ -104,8 +104,12 @@ def hands_in_frame(bgr):
     return boxes
 
 # --------------------------- INVENTORY SOCKET ------------------------------
-def bulk_add(label:str, qty:int):
-    """Add *qty* copies of *label* (already lowercase)."""
+def bulk_add(label:str, qty:int, confidence:float=100.0, expiration_days:int=None):
+    """Add *qty* copies of *label* (already lowercase) with metadata."""
+    global inventory_items  # Ensure we're using the global variable
+    if not isinstance(inventory_items, list):
+        inventory_items = []  # Reset if somehow corrupted
+        
     for _ in range(max(1, qty)):
         inventory_items.append({
             "id": uuid.uuid4().hex,
@@ -113,24 +117,42 @@ def bulk_add(label:str, qty:int):
             "pending": False,
             "direction": "in",
             "time": time.time(),
-            "image": None
+            "image": None,
+            "confidence": confidence,
+            "expiration_days": expiration_days,
+            "added_timestamp": time.time(),
+            "last_updated": time.time()
         })
 
 def emit_inventory(source=None):
-    """Aggregate items then push to every client.
-
-    `source` is an optional string: e.g. "camera", "receipt", "clear".
-    """
-    agg = defaultdict(lambda: {"count": 0, "images": []})
+    """Aggregate items then push to every client."""
+    global inventory_items  # Ensure we're using the global variable
+    if not isinstance(inventory_items, list):
+        inventory_items = []  # Reset if somehow corrupted
+        
+    agg = defaultdict(lambda: {
+        "count": 0, 
+        "images": [],
+        "confidence": 0,
+        "expiration_days": None,
+        "added_timestamp": None,
+        "last_updated": None
+    })
+    
     for it in inventory_items:
         agg[it["label"]]["count"] += 1
         if it["image"]:
             agg[it["label"]]["images"].append(it["image"])
+        # Update metadata with the most recent values
+        agg[it["label"]]["confidence"] = max(agg[it["label"]]["confidence"], it.get("confidence", 0))
+        agg[it["label"]]["expiration_days"] = it.get("expiration_days")
+        agg[it["label"]]["added_timestamp"] = it.get("added_timestamp")
+        agg[it["label"]]["last_updated"] = it.get("last_updated")
 
     socketio.emit("inventory_update",
                   {"inventory": agg,
                    "timestamp": time.time(),
-                   "source": source})   # <‑‑ always present, can be None
+                   "source": source})
 
 @socketio.on("connect")
 def _on_connect(): emit_inventory()
@@ -150,13 +172,27 @@ def big_crop(box, frame):
 
 def add_placeholder(direction,img_bgr,track_hash):
     inventory_items.append({
-        "id":uuid.uuid4().hex,"label":"unknown","pending":True,
-        "direction":direction,"hash":track_hash,"image":b64encode_img(img_bgr),
-        "time":time.time()})
+        "id": uuid.uuid4().hex,
+        "label": "unknown",
+        "pending": True,
+        "direction": direction,
+        "hash": track_hash,
+        "image": b64encode_img(img_bgr),
+        "time": time.time(),
+        "confidence": 0,
+        "expiration_days": None,
+        "added_timestamp": time.time(),
+        "last_updated": time.time()
+    })
     emit_inventory()
 
 def finalize_in(label,itm):
-    itm.update({"label":label,"pending":False,"direction":"in"})
+    itm.update({
+        "label": label,
+        "pending": False,
+        "direction": "in",
+        "last_updated": time.time()
+    })
     emit_inventory()
 
 def finalize_out(label,itm):
@@ -186,24 +222,26 @@ def update_hand_side(tid,center,w,h,frame):
         # look for nearby stable item track
         near=[it for it in item_tracks.values()
               if math.hypot(center[0]-it["center"][0], center[1]-it["center"][1])<HAND_ITEM_DIST
-              and it["stable"]]
+              and it["stable"] and not it.get("processed", False)]  # Add processed flag check
         if near:
             logger.info("Found nearby item - playing add sound")
             crop=big_crop(near[0]["box"],frame)
             add_placeholder("in",crop,dhash(crop))
             play_sound(ADD_SOUND)  # Play sound immediately when item enters
             tr["flag"]=True
+            near[0]["processed"] = True  # Mark item as processed
         else:
             logger.info("No nearby items found for entry")
     if prev=="below" and new=="above" and v<-2 and not tr["flag"]:
         near=[it for it in item_tracks.values()
               if math.hypot(center[0]-it["center"][0], center[1]-it["center"][1])<HAND_ITEM_DIST
-              and it["stable"]]
+              and it["stable"] and not it.get("processed", False)]  # Add processed flag check
         if near:
             crop=big_crop(near[0]["box"],frame)
             add_placeholder("out",crop,dhash(crop))
             play_sound(REMOVE_SOUND)  # Play sound immediately when item exits
             tr["flag"]=True
+            near[0]["processed"] = True  # Mark item as processed
     # reset flag when object returns to original side
     if prev!=new and abs(v)<1: tr["flag"]=False
 
@@ -218,13 +256,17 @@ def update_item_side(tid,center,w,h,frame):
     if len(tr["hist"])==STABLE_FRAMES: tr["stable"]=True
     v=dy(tr["hist"])
 
-    # item crosses alone
-    if prev=="above" and new=="below" and v>2 and tr["stable"] and not tr["flag"]:
+    # item crosses alone - only process if not already processed
+    if prev=="above" and new=="below" and v>2 and tr["stable"] and not tr["flag"] and not tr.get("processed", False):
         crop=big_crop(tr["box"],frame)
-        add_placeholder("in",crop,dhash(crop)); tr["flag"]=True
-    if prev=="below" and new=="above" and v<-2 and tr["stable"] and not tr["flag"]:
+        add_placeholder("in",crop,dhash(crop))
+        tr["flag"]=True
+        tr["processed"] = True  # Mark as processed
+    if prev=="below" and new=="above" and v<-2 and tr["stable"] and not tr["flag"] and not tr.get("processed", False):
         crop=big_crop(tr["box"],frame)
-        add_placeholder("out",crop,dhash(crop)); tr["flag"]=True
+        add_placeholder("out",crop,dhash(crop))
+        tr["flag"]=True
+        tr["processed"] = True  # Mark as processed
 
 # --------------------------- MAIN VIDEO LOOP -------------------------------
 def generate_frames():
@@ -322,18 +364,25 @@ def generate_frames():
                 init="below" if below_curve((cx,cy),w,h) else "above"
                 item_tracks[iid]={"center":(cx,cy),"box":det["box"],
                                   "side":init,"hist":[(cx,cy,time.time())],
-                                  "stable":False,"flag":False,"lost":0}
+                                  "stable":False,"flag":False,"lost":0,
+                                  "processed":False}  # Add processed flag
             else:
                 iid=best; item_tracks[iid].update(center=(cx,cy),box=det["box"],lost=0)
             cur_i.add(iid); update_item_side(iid,(cx,cy),w,h,frame_zoom)
             cv2.rectangle(frame_zoom,(int(x1),int(y1)),(int(x2),int(y2)),(255,0,0),2)
 
-        # purge lost item tracks
+        # purge lost item tracks and reset processed flag
         for iid in list(item_tracks):
             if iid not in cur_i:
                 item_tracks[iid]["lost"]+=1
                 if item_tracks[iid]["lost"]>MAX_LOST_FRAMES:
                     item_tracks.pop(iid,None)
+            else:
+                # Reset processed flag when item is no longer near hands
+                if not any(math.hypot(item_tracks[iid]["center"][0]-hx, 
+                                    item_tracks[iid]["center"][1]-hy) <= HAND_ITEM_DIST 
+                          for (hx,hy) in hand_centres):
+                    item_tracks[iid]["processed"] = False
 
         # draw boundary
         pts=[(x,int(parabola_y(x,w,h))) for x in range(0,w,8)]
@@ -363,6 +412,10 @@ def video_feed(): return Response(generate_frames(),
 @app.route("/analyze_inventory", methods=["POST"])
 def analyze_inventory():
     try:
+        global inventory_items  # Ensure we're using the global variable
+        if not isinstance(inventory_items, list):
+            inventory_items = []  # Reset if somehow corrupted
+            
         prompt=("You are an image inventory assistant. Identify EVERY food or drink "
                 "item you see in the image. Ignore hands and background. Provide "
                 "a short, direct answer with just the item name for each detected "
@@ -370,8 +423,18 @@ def analyze_inventory():
                 "Return strict JSON as {\"items\":[{\"name\":\"<item>\",\"confidence\":<0-1>}]}")
 
         results={}
-        for itm in list(inventory_items):
-            if not itm["pending"]: continue
+        pending_items = [itm for itm in inventory_items if itm.get("pending", False)]
+        
+        if not pending_items:
+            # If no pending items, analyze all non-pending items instead
+            pending_items = [itm for itm in inventory_items if not itm.get("pending", False)]
+            if not pending_items:
+                return jsonify({"results": {}})
+
+        for itm in pending_items:
+            if not itm.get("image"):  # Skip items without images
+                continue
+                
             gpt=client.chat.completions.create(
                 model="gpt-4.1",
                 messages=[{"role":"user","content":[
@@ -382,12 +445,41 @@ def analyze_inventory():
             if not parsed.get("items"): continue
             lbl=parsed["items"][0]["name"].lower().strip()
             conf=round(float(parsed["items"][0]["confidence"])*100)
-            results.setdefault(lbl,[]).append({"food":lbl,"confidence":conf,"image":itm["image"]})
-            if itm["direction"]=="in":  finalize_in(lbl,itm)
-            else:                       finalize_out(lbl,itm)
+            
+            # Get expiration data for the item
+            expiration_prompt = f"What is the typical shelf life in days for {lbl} when stored properly? Return only a number."
+            expiration_response = client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[{"role":"user","content":expiration_prompt}],
+                max_tokens=10
+            )
+            try:
+                expiration_days = int(expiration_response.choices[0].message.content.strip())
+            except (ValueError, AttributeError):
+                expiration_days = None
+            
+            results.setdefault(lbl,[]).append({
+                "food": lbl,
+                "confidence": conf,
+                "image": itm["image"],
+                "expiration_days": expiration_days
+            })
+            
+            if itm.get("direction")=="in":
+                finalize_in(lbl,itm)
+                # Update the item's metadata
+                itm.update({
+                    "confidence": conf,
+                    "expiration_days": expiration_days,
+                    "last_updated": time.time()
+                })
+            else:
+                finalize_out(lbl,itm)
+                
         return jsonify({"results":results})
     except Exception as e:
-        logger.error(e); return jsonify({"error":str(e)}),500
+        logger.error(f"Error in analyze_inventory: {e}")
+        return jsonify({"error":str(e)}),500
 
 # -- get_recipes_and_expirations unchanged (omitted for brevity) ------------
 @app.route('/get_recipes_and_expirations', methods=['POST'])
@@ -459,10 +551,13 @@ IMPORTANT: Ensure your response is ONLY valid JSON that can be parsed, with no a
 @app.route("/clear_inventory", methods=["POST"])
 def clear_inventory():
     """Wipe both stocked and pending items, then notify the UI."""
-    inventory_items.clear()          # forget everything
-    emit_inventory(source="clear")                 # push empty current inventory
-    socketio.emit("ai_inventory_cleared")   # tell UI to hide AI panel
-    return jsonify({"status": "cleared"})
+    try:
+        inventory_items.clear()  # forget everything
+        emit_inventory(source="clear")  # push empty current inventory
+        return jsonify({"status": "cleared"})
+    except Exception as e:
+        logger.error(f"Error clearing inventory: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 # ---------- RECEIPT OCR & INVENTORY UPDATE ---------------------------------
 @app.route("/upload_receipt", methods=["POST"])
@@ -488,7 +583,8 @@ def upload_receipt():
             "Below is raw OCR text from a grocery receipt.\n"
             "Extract a JSON array called 'items' where each entry has "
             "'name' (lower‑case, no brand codes) and 'qty' (integer, "
-            "default 1 if missing).  Ignore prices, totals, loyalty text, "
+            "default 1 if missing).  Only include food and drink items. "
+            "Ignore non-food items, prices, totals, loyalty text, "
             "coupons, taxes, etc.\n\nOCR:\n```" + raw_text + "```"
         )
 
@@ -542,7 +638,11 @@ def update_inventory_count():
                     "pending": False,
                     "direction": "in",
                     "time": time.time(),
-                    "image": None  # Add image field as None
+                    "image": None,
+                    "confidence": 100.0,  # Default confidence for manual additions
+                    "expiration_days": None,
+                    "added_timestamp": time.time(),
+                    "last_updated": time.time()
                 })
                 new_count += 1
         elif delta < 0:
@@ -554,7 +654,6 @@ def update_inventory_count():
                     if itm["label"].lower() == item and not itm.get("pending", False):
                         inventory_items.pop(i)
                         new_count -= 1
-                        break
         
         # Emit updated inventory
         emit_inventory()
@@ -577,21 +676,84 @@ def remove_inventory_item():
         if not item:
             return jsonify({'error': 'Item name is required'}), 400
             
-        # Remove all matching items
+        # Remove all matching items (both pending and non-pending)
         initial_length = len(inventory_items)
+        
+        # Remove all items with matching label, regardless of source
         inventory_items[:] = [itm for itm in inventory_items if itm["label"].lower() != item]
         
         if len(inventory_items) == initial_length:
             return jsonify({'error': 'Item not found in inventory'}), 404
             
         # Emit updated inventory
-        emit_inventory()
-        socketio.emit('ai_inventory_cleared')
+        emit_inventory(source="removed")
         
         return jsonify({'success': True})
         
     except Exception as e:
         logger.error(f"Error removing inventory item: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/update_item_name', methods=['POST'])
+def update_item_name():
+    try:
+        data = request.json
+        old_name = data.get('old_name', '').lower()
+        new_name = data.get('new_name', '').lower()
+        
+        if not old_name or not new_name:
+            return jsonify({'error': 'Both old and new names are required'}), 400
+            
+        if old_name == new_name:
+            return jsonify({'error': 'New name must be different from old name'}), 400
+            
+        # Update all matching items in inventory
+        updated_count = 0
+        for item in inventory_items:
+            if item["label"].lower() == old_name:
+                item["label"] = new_name
+                item["last_updated"] = time.time()
+                updated_count += 1
+        
+        if updated_count == 0:
+            return jsonify({'error': 'Item not found in inventory'}), 404
+            
+        # Emit updated inventory
+        emit_inventory()
+        
+        return jsonify({
+            'success': True,
+            'updated_count': updated_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating item name: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/add_manual_item', methods=['POST'])
+def add_manual_item():
+    try:
+        data = request.json
+        item_name = data.get('item', '').lower()  # Convert to lowercase
+        count = data.get('count', 1)
+        
+        if not item_name:
+            return jsonify({'error': 'Item name is required'}), 400
+            
+        # Add the item(s) to inventory
+        bulk_add(item_name, count, confidence=100.0)
+        
+        # Emit updated inventory
+        emit_inventory(source="manual_add")
+        
+        return jsonify({
+            'success': True,
+            'item': item_name,
+            'count': count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error adding manual item: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ---------------------------------------------------------------------------
