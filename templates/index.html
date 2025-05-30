@@ -1156,9 +1156,9 @@
             const recipesSection = document.getElementById('recipes-section');
             const recipesList = document.getElementById('recipes-list');
             
-            // Get all food items from our AI inventory panel instead of manualInventory
+            // Get all food items from the current inventory
             const foodItems = Array.from(
-                document.querySelectorAll('.ai-inventory-item')
+                document.querySelectorAll('.inventory-item')
             ).map(item => item.dataset.foodName).filter(Boolean);
             
             if (foodItems.length === 0) {
@@ -1179,7 +1179,11 @@
                     body: JSON.stringify({ items: foodItems })
                 });
                 
-                if (!resp.ok) throw await resp.json();
+                if (!resp.ok) {
+                    const errorData = await resp.json();
+                    throw new Error(errorData.error || 'Failed to get recipes');
+                }
+                
                 const data = await resp.json();
                 
                 // Update the UI with recipes
@@ -1222,7 +1226,7 @@
                 recipesList.innerHTML = `<div class="alert alert-danger">Error: ${e.message || 'Failed to get recipes'}</div>`;
             } finally {
                 recipesBtn.disabled = false;
-                recipesBtn.innerHTML = '<i class="fas fa-utensils"></i> Get Recipes & Expirations';
+                recipesBtn.innerHTML = '<i class="fas fa-utensils"></i> Get Recipes';
             }
         }
 
@@ -1232,7 +1236,10 @@
 
             try {
                 const resp = await fetch('/clear_inventory', { method: 'POST' });
-                if (!resp.ok) throw await resp.json();
+                if (!resp.ok) {
+                    const errorData = await resp.json();
+                    throw new Error(errorData.error || 'Failed to clear inventory');
+                }
                 
                 // Clear the inventory list
                 const list = document.getElementById('inventory-list');
@@ -1249,6 +1256,7 @@
                 
             } catch (e) {
                 console.error('Clear inventory failed:', e);
+                alert('Failed to clear inventory: ' + e.message);
             }
         });
 

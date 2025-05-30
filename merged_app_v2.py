@@ -527,7 +527,7 @@ IMPORTANT: Ensure your response is ONLY valid JSON that can be parsed, with no a
 
         # Make the API call to OpenAI
         response = client.chat.completions.create(
-            model="gpt-4.1", 
+            model="gpt-4.1",  # Using GPT-4 for better recipe generation
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             max_tokens=1500
@@ -537,6 +537,14 @@ IMPORTANT: Ensure your response is ONLY valid JSON that can be parsed, with no a
         content = response.choices[0].message.content
         result = json.loads(content)
         
+        # Validate the response structure
+        if not isinstance(result, dict) or 'recipes' not in result:
+            raise ValueError("Invalid response format from OpenAI")
+            
+        # Ensure we have at least one recipe
+        if not result['recipes'] or not isinstance(result['recipes'], list):
+            result['recipes'] = []
+            
         return jsonify(result)
 
     except json.JSONDecodeError as e:
