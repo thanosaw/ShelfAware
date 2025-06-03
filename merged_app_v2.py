@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 #  Fusion fridge‑tracker: hands + YOLO item tracker + GPT identification
 # ---------------------------------------------------------------------------
-import os, time, math, logging, base64, json, itertools, uuid, difflib
+import os, time, math, logging, base64, json, itertools, uuid, difflib, re
 from collections import defaultdict
 import numpy as np, cv2
 from flask import Flask, render_template, Response, jsonify, request
@@ -408,6 +408,44 @@ def index(): return render_template("index.html")
 def video_feed(): return Response(generate_frames(),
     mimetype="multipart/x-mixed-replace; boundary=frame")
 
+@app.route('/analyze_image', methods=['POST'])
+def analyze_image():
+    try:
+        img_data = request.json.get('image')
+        if not img_data:
+            return jsonify({'error': 'No image provided'}), 400
+
+        resp = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[{
+                'role': 'user',
+                'content': [
+                    {'type': 'text',
+                     'text': (
+                         'what is in this image? Disregard any text labels and '
+                         'identify it yourself. The image contains food items '
+                         'that are being tracked entering a fridge. Please '
+                         'identify the specific food item and provide a '
+                         'confidence level. If it is not food, say unknown.'
+                     )},
+                    {'type': 'image_url',
+                     'image_url': {'url': f'data:image/jpeg;base64,{img_data}'}}
+                ]
+            }],
+            max_tokens=300
+        )
+
+        text = resp.choices[0].message.content
+        food = text.split('(')[0].strip()
+        m = re.search(r'(\d+)%', text)
+        conf = int(m.group(1)) if m else 90
+
+        return jsonify({'food': food, 'confidence': conf, 'raw': text})
+
+    except Exception as e:
+        logger.error(f"Error in analyze_image: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # -------------- GPT RESOLUTION ENDPOINT (unchanged wrt fusion) ------------
 @app.route("/analyze_inventory", methods=["POST"])
 def analyze_inventory():
@@ -562,6 +600,7 @@ def clear_inventory():
     try:
         inventory_items.clear()  # forget everything
         emit_inventory(source="clear")  # push empty current inventory
+        socketio.emit('ai_inventory_cleared')
         return jsonify({"status": "cleared"})
     except Exception as e:
         logger.error(f"Error clearing inventory: {str(e)}")
