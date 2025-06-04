@@ -4,7 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Food Detection</title>
+    <!-- Bootswatch theme for nicer default styling -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@4.5.2/dist/minty/bootstrap.min.css">
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Google font for a modern look -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/openai@4.0.0/dist/openai.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
@@ -12,6 +16,7 @@
         body {
             padding: 20px;
             background-color: #f8f9fa;
+            font-family: 'Inter', 'Helvetica Neue', sans-serif;
         }
         .container {
             max-width: 1800px;
@@ -28,6 +33,11 @@
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             overflow: hidden;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .mosaic-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
         }
         .mosaic-item.video {
             grid-column: 1 / -1;
@@ -55,6 +65,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            background-color: #f1f7ff;
         }
         .mosaic-body {
             padding: 15px;
@@ -124,6 +135,8 @@
             padding: 5px 10px;
             border-radius: 5px;
             font-size: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            z-index: 1030;
         }
         .connected {
             background-color: #28a745;
@@ -481,12 +494,24 @@
         .missing-item-inputs input[type="number"] {
             width: 80px;
         }
+        /* Responsive layout */
+        @media (max-width: 768px) {
+            .mosaic-grid {
+                grid-template-columns: 1fr;
+            }
+            .mosaic-item.video {
+                height: auto;
+            }
+        }
     </style>
 </head>
 <body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+        <a class="navbar-brand" href="#">ShelfAware</a>
+    </nav>
     <div id="connection-status" class="disconnected">Disconnected</div>
     <div class="container">
-        <h1 class="mb-4">Food Detection System</h1>
+        <h1 class="text-center mb-4">Food Detection System</h1>
         
         <div class="mosaic-grid">
             <!-- Video Feed -->
