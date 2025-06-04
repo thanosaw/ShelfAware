@@ -2,6 +2,7 @@ from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO, emit
 import cv2
 from ultralytics import YOLO
+import torch
 import time
 import logging
 import numpy as np
@@ -22,7 +23,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 # Configure Socket.IO with explicit settings
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
-model = YOLO("model/food_detector_small.pt") 
+model = YOLO("model/food_detector_small.pt")
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+model.fuse()
+model.to(device)
 
 menu = {
     'banana': 5,
@@ -37,8 +41,14 @@ menu = {
     'white rice': 5
 }
 
-# Global variable for the camera
+# Optimization constants
+ZOOM_FACTOR = 1.2  # digital zoom for better detection resolution
+ALPHA = 1.2       # contrast control (1.0-3.0)
+BETA = 20         # brightness control (0-100)
+
+# Global variable for the camera with small buffer to reduce latency
 camera = cv2.VideoCapture(0)
+camera.set(cv2.CAP_PROP_BUFFERSIZE, 2)
 
 # OpenAI client (ensure OPENAI_API_KEY is set in your env)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -59,6 +69,14 @@ def capture_detection_screenshot(frame, class_name, track_id):
         'timestamp': time.time()
     }
 
+def digital_zoom(frame, factor):
+    """Apply a simple digital zoom for improved detection."""
+    h, w = frame.shape[:2]
+    new_w, new_h = int(w / factor), int(h / factor)
+    x1, y1 = (w - new_w) // 2, (h - new_h) // 2
+    cropped = frame[y1:y1 + new_h, x1:x1 + new_w]
+    return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
 def detect_objects(frame):
     """
     Your existing object detection function
@@ -78,6 +96,7 @@ def handle_disconnect():
 
 def generate_frames():
     camera = cv2.VideoCapture(0)
+    camera.set(cv2.CAP_PROP_BUFFERSIZE, 2)
     last_emit_time = 0
     last_screenshot_time = 0  # Add screenshot timing control
     emit_interval = 0.5
@@ -94,13 +113,23 @@ def generate_frames():
             logger.error("Failed to read frame from camera")
             break
         else:
+            # Basic preprocessing to enhance detection
+            frame = digital_zoom(frame, ZOOM_FACTOR)
+            frame = cv2.convertScaleAbs(frame, alpha=ALPHA, beta=BETA)
             if frame_width is None:
                 frame_width = frame.shape[1] # Get frame width once
 
             total_price = 0
             detected_items = {}
-            # Use model.track instead of model() for object tracking
-            results = model.track(frame, persist=True, conf=0.5, verbose=False) # persist=True maintains tracks across frames
+            # Use model.track within no_grad to speed up inference
+            with torch.no_grad():
+                results = model.track(
+                    frame,
+                    persist=True,
+                    conf=0.5,
+                    iou=0.5,
+                    verbose=False
+                )  # persist=True maintains tracks across frames
 
             current_track_ids = set()
 
