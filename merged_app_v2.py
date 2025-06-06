@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 #  Fusion fridge‑tracker: hands + YOLO item tracker + GPT identification
 # ---------------------------------------------------------------------------
-import os, time, math, logging, base64, json, itertools, uuid, difflib
+import os, time, math, logging, base64, json, itertools, uuid, difflib, re
 from collections import defaultdict
 import numpy as np, cv2
 from flask import Flask, render_template, Response, jsonify, request
@@ -71,6 +71,30 @@ next_hand_id = itertools.count()
 next_item_id = itertools.count()
 inventory_items = []  # Initialize as empty list
 
+# Add this near the top with other globals
+detection_log = []
+
+def update_detection_log(action, item_name, count=1, confidence=None):
+    """Update the detection log with item actions"""
+    timestamp = time.time()
+    log_entry = {
+        "timestamp": timestamp,
+        "action": action,  # "added" or "removed"
+        "item": item_name,
+        "count": count,
+        "confidence": confidence
+    }
+    detection_log.append(log_entry)
+    # Keep only last 100 entries
+    if len(detection_log) > 100:
+        detection_log.pop(0)
+    # Emit the update to all clients
+    socketio.emit("detection_update", {
+        "items": {item_name: count},
+        "action": action,
+        "timestamp": timestamp
+    })
+
 # --------------------------- UTILITY FUNCS ---------------------------------
 def b64encode_img(bgr):
     _, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
@@ -83,7 +107,157 @@ def dhash(bgr, size=8):
     diff  = small[:,1:] > small[:,:-1]
     return sum(1<<i for i,v in enumerate(diff.flatten()) if v)
 
-def name_sim(a,b): return difflib.SequenceMatcher(None,a,b).ratio()
+def normalize_food_name(name):
+    """Normalize food names for better matching"""
+    if not name:
+        return ""
+    # Convert to lowercase
+    name = name.lower()
+    
+    # Remove parenthetical descriptions
+    name = re.sub(r'\([^)]*\)', '', name).strip()
+    
+    # Remove common prefixes/suffixes
+    prefixes = ["a ", "an ", "the ", "some ", "fresh ", "whole ", "organic "]
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    
+    # Remove common suffixes
+    suffixes = ["s", "es", "ies"]
+    for suffix in suffixes:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)]
+    
+    # Handle container types
+    containers = {
+        "bottle": ["bottle of", "bottled", "bottles"],
+        "can": ["can of", "canned", "cans"],
+        "jar": ["jar of", "jars"],
+        "box": ["box of", "boxes"],
+        "pack": ["pack of", "package of", "packages"],
+        "container": ["container of", "containers"]
+    }
+    
+    for container, variants in containers.items():
+        for variant in variants:
+            if variant in name:
+                name = name.replace(variant, container)
+    
+    # Handle beverage types
+    beverages = {
+        "water": ["sparkling water", "mineral water", "spring water", "drinking water"],
+        "soda": ["carbonated drink", "soft drink", "pop", "cola"],
+        "juice": ["fruit juice", "orange juice", "apple juice"],
+        "milk": ["dairy milk", "almond milk", "soy milk"],
+        "beer": ["ale", "lager", "brew"],
+        "wine": ["red wine", "white wine", "rose wine"]
+    }
+    
+    for base, variants in beverages.items():
+        for variant in variants:
+            if variant in name:
+                name = name.replace(variant, base)
+    
+    # Replace common variations
+    variations = {
+        "tomato": "tomatoes",
+        "potato": "potatoes",
+        "apple": "apples",
+        "banana": "bananas",
+        "orange": "oranges",
+        "milk": "dairy milk",
+        "cheese": "cheese",
+        "yogurt": "yogurt",
+        "bread": "bread",
+        "egg": "eggs",
+        "chicken": "chicken",
+        "beef": "beef",
+        "pork": "pork",
+        "fish": "fish",
+        "rice": "rice",
+        "pasta": "pasta",
+        "sauce": "sauce",
+        "juice": "juice",
+        "water": "water",
+        "soda": "soda",
+        "beer": "beer",
+        "wine": "wine"
+    }
+    
+    for base, variant in variations.items():
+        if name == base or name == variant:
+            return base
+    
+    # Clean up any remaining whitespace
+    name = ' '.join(name.split())
+    return name
+
+def name_sim(a, b):
+    """Calculate similarity between two food names"""
+    # Normalize both names
+    a = normalize_food_name(a)
+    b = normalize_food_name(b)
+    
+    # If either name is empty after normalization, return 0
+    if not a or not b:
+        return 0.0
+    
+    # Direct match after normalization
+    if a == b:
+        return 1.0
+    
+    # Check if one name contains the other
+    if a in b or b in a:
+        return 0.9
+    
+    # Split into words and check for partial matches
+    a_words = set(a.split())
+    b_words = set(b.split())
+    common_words = a_words.intersection(b_words)
+    
+    if common_words:
+        # Calculate word overlap score
+        word_overlap = len(common_words) / max(len(a_words), len(b_words))
+        if word_overlap > 0.5:  # If more than half the words match
+            return 0.8
+    
+    # Calculate Levenshtein distance
+    distance = levenshtein(a, b)
+    max_len = max(len(a), len(b))
+    if max_len == 0:
+        return 0.0
+    
+    # Convert distance to similarity score
+    similarity = 1.0 - (distance / max_len)
+    
+    # Boost similarity for common food name patterns
+    if similarity > 0.5:  # Lowered threshold to catch more potential matches
+        # Check for common food name patterns
+        common_patterns = [
+            ("whole", "regular"),
+            ("organic", "regular"),
+            ("fresh", ""),
+            ("frozen", ""),
+            ("canned", ""),
+            ("dried", ""),
+            ("raw", ""),
+            ("cooked", ""),
+            ("ripe", ""),
+            ("unripe", ""),
+            ("bottle", "container"),
+            ("can", "container"),
+            ("jar", "container"),
+            ("box", "container"),
+            ("pack", "container")
+        ]
+        for pattern1, pattern2 in common_patterns:
+            if (pattern1 in a and pattern2 in b) or (pattern2 in a and pattern1 in b):
+                similarity += 0.3  # Increased boost for container matches
+                break
+    
+    return min(1.0, similarity)
+
 def hamming(a,b):  return bin(a^b).count("1") if a and b else 64
 
 # CV helpers
@@ -193,17 +367,88 @@ def finalize_in(label,itm):
         "direction": "in",
         "last_updated": time.time()
     })
+    # Log the addition in detection log
+    update_detection_log("added", label, 1, itm.get('confidence'))
     emit_inventory()
 
 def finalize_out(label,itm):
-    best,best_s=None,0
-    for cand in inventory_items:
-        if cand["pending"] or cand["direction"]!="in": continue
-        s=max(name_sim(label,cand["label"]),1-hamming(itm["hash"],cand["hash"])/64)
-        if s>best_s: best,best_s=cand,s
-    if best_s>=0.75: inventory_items.remove(best)
-    inventory_items.remove(itm)
-    emit_inventory()
+    """Handle item removal from the fridge inventory"""
+    try:
+        logger.info(f"Attempting to remove item: {label}")
+        
+        # First, ensure we have a valid label
+        if not label or label.lower() == "unknown":
+            logger.warning("Invalid or unknown label for removal")
+            inventory_items.remove(itm)
+            emit_inventory(source="removed")
+            return
+
+        # Find all matching items in inventory (case-insensitive)
+        matching_items = []
+        normalized_label = normalize_food_name(label)
+        logger.info(f"Normalized label: {normalized_label}")
+        
+        for cand in inventory_items:
+            if not cand["pending"] and cand["direction"] == "in":
+                normalized_cand = normalize_food_name(cand["label"])
+                logger.info(f"Comparing with normalized item: {normalized_cand}")
+                if normalized_cand == normalized_label:
+                    matching_items.append(cand)
+                    logger.info(f"Found exact match after normalization: {cand['label']}")
+
+        if matching_items:
+            # Remove the most recently added item (last in the list)
+            item_to_remove = matching_items[-1]
+            logger.info(f"Removing item from inventory: {item_to_remove['label']}")
+            inventory_items.remove(item_to_remove)
+            update_detection_log("removed", item_to_remove['label'], 1, item_to_remove.get('confidence'))
+        else:
+            # If no exact match, try fuzzy matching with improved similarity
+            best, best_s = None, 0
+            for cand in inventory_items:
+                if cand["pending"] or cand["direction"] != "in":
+                    continue
+                
+                # Calculate similarity using both name and image hash
+                name_sim_score = name_sim(label, cand["label"])
+                hash_sim_score = 1 - (hamming(itm["hash"], cand["hash"]) / 64) if "hash" in itm and "hash" in cand else 0
+                
+                # Weight the scores (80% name similarity, 20% image hash)
+                total_score = (0.8 * name_sim_score) + (0.2 * hash_sim_score)
+                
+                logger.info(f"Comparing '{label}' with '{cand['label']}': name_sim={name_sim_score:.2f}, hash_sim={hash_sim_score:.2f}, total={total_score:.2f}")
+                
+                if total_score > best_s:
+                    best, best_s = cand, total_score
+                    logger.info(f"Found potential match: {cand['label']} with score {total_score:.2f}")
+            
+            # Lower the threshold for matching to 0.60
+            if best_s >= 0.60:
+                logger.info(f"Removing fuzzy-matched item: {best['label']} (score: {best_s:.2f})")
+                inventory_items.remove(best)
+                update_detection_log("removed", best['label'], 1, best.get('confidence'))
+            else:
+                logger.warning(f"No good match found for removal of {label}")
+
+        # Always remove the temporary detection item
+        if itm in inventory_items:
+            inventory_items.remove(itm)
+            logger.info("Removed temporary detection item")
+        
+        # Emit the updated inventory
+        emit_inventory(source="removed")
+        logger.info("Inventory updated after removal")
+        
+    except Exception as e:
+        logger.error(f"Error in finalize_out: {e}")
+        # Ensure we at least remove the temporary detection item
+        try:
+            if itm in inventory_items:
+                inventory_items.remove(itm)
+                emit_inventory(source="removed")
+                logger.info("Removed temporary item after error")
+        except Exception as e2:
+            logger.error(f"Failed to remove temporary item: {e2}")
 
 # --------------------------- DY / MOTION -----------------------------------
 def dy(hist): return 0 if len(hist)<2 else hist[-1][1]-hist[-2][1]
@@ -422,7 +667,7 @@ def analyze_inventory():
                 "item. If it's not a food or drink item, respond with 'non-food item'. "
                 "Return strict JSON as {\"items\":[{\"name\":\"<item>\",\"confidence\":<0-1>}]}")
 
-        results={}
+        results = {}
         pending_items = [itm for itm in inventory_items if itm.get("pending", False)]
         
         if not pending_items:
@@ -435,46 +680,54 @@ def analyze_inventory():
             if not itm.get("image"):  # Skip items without images
                 continue
                 
-            gpt=client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[{"role":"user","content":[
-                    {"type":"text","text":prompt},
-                    {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{itm['image']}"}}]}],
-                response_format={"type":"json_object"},max_tokens=300)
-            parsed=json.loads(gpt.choices[0].message.content)
-            if not parsed.get("items"): continue
-            lbl=parsed["items"][0]["name"].lower().strip()
-            conf=round(float(parsed["items"][0]["confidence"])*100)
-            
-            # Get expiration data for the item
-            expiration_prompt = f"What is the typical shelf life in days for {lbl} when stored properly? Return only a number."
-            expiration_response = client.chat.completions.create(
-                model="gpt-4.1",
-                messages=[{"role":"user","content":expiration_prompt}],
-                max_tokens=10
-            )
             try:
-                expiration_days = int(expiration_response.choices[0].message.content.strip())
-            except (ValueError, AttributeError):
-                expiration_days = None
-            
-            results.setdefault(lbl,[]).append({
-                "food": lbl,
-                "confidence": conf,
-                "image": itm["image"],
-                "expiration_days": expiration_days
-            })
-            
-            if itm.get("direction")=="in":
-                finalize_in(lbl,itm)
-                # Update the item's metadata
-                itm.update({
+                gpt = client.chat.completions.create(
+                    model="gpt-4.1",
+                    messages=[{"role":"user","content":[
+                        {"type":"text","text":prompt},
+                        {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{itm['image']}"}}]}],
+                    response_format={"type":"json_object"},max_tokens=300)
+                
+                parsed = json.loads(gpt.choices[0].message.content)
+                if not parsed.get("items"): 
+                    continue
+                    
+                lbl = parsed["items"][0]["name"].lower().strip()
+                conf = round(float(parsed["items"][0]["confidence"])*100)
+                
+                # Get expiration data for the item
+                expiration_prompt = f"What is the typical shelf life in days for {lbl} when stored properly? Return only a number."
+                expiration_response = client.chat.completions.create(
+                    model="gpt-4.1",
+                    messages=[{"role":"user","content":expiration_prompt}],
+                    max_tokens=10
+                )
+                try:
+                    expiration_days = int(expiration_response.choices[0].message.content.strip())
+                except (ValueError, AttributeError):
+                    expiration_days = None
+                
+                results.setdefault(lbl,[]).append({
+                    "food": lbl,
                     "confidence": conf,
-                    "expiration_days": expiration_days,
-                    "last_updated": time.time()
+                    "image": itm["image"],
+                    "expiration_days": expiration_days
                 })
-            else:
-                finalize_out(lbl,itm)
+                
+                if itm.get("direction")=="in":
+                    finalize_in(lbl,itm)
+                    # Update the item's metadata
+                    itm.update({
+                        "confidence": conf,
+                        "expiration_days": expiration_days,
+                        "last_updated": time.time()
+                    })
+                else:
+                    finalize_out(lbl,itm)
+                    
+            except Exception as e:
+                logger.error(f"Error processing item: {e}")
+                continue
                 
         return jsonify({"results":results})
     except Exception as e:

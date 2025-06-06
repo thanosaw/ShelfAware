@@ -518,7 +518,7 @@
             <div class="mosaic-item video">
                 <div class="mosaic-header">
                     <h3 class="mb-0">Live Detection</h3>
-                    <button id="toggle-stream" class="btn btn-primary">Start Detection</button>
+                    <button type="button" id="toggle-stream" class="btn btn-primary">Start Detection</button>
                 </div>
                 <div class="mosaic-body">
                     <img id="video-feed" src="" style="display: none;">
@@ -530,13 +530,13 @@
                 <div class="mosaic-header">
                     <h3 class="mb-0">Current Inventory</h3>
                     <div>
-                        <button id="analyze-all-btn" class="btn btn-primary mr-2">
+                        <button type="button" id="analyze-all-btn" class="btn btn-primary mr-2">
                             <i class="fas fa-robot"></i> Analyze Item
                         </button>
-                        <button id="get-recipes-btn" class="btn btn-success">
+                        <button type="button" id="get-recipes-btn" class="btn btn-success">
                             <i class="fas fa-utensils"></i> Get Recipes
                         </button>
-                        <button id="clear-inventory-btn" class="btn btn-danger ml-2">
+                        <button type="button" id="clear-inventory-btn" class="btn btn-danger ml-2">
                             <i class="fas fa-trash"></i> Clear
                         </button>
                     </div>
@@ -552,7 +552,7 @@
                         <div class="missing-item-inputs">
                             <input type="text" id="missing-item-name" class="form-control" placeholder="Specific item name (e.g., red apple, whole milk)">
                             <input type="number" id="missing-item-count" class="form-control" value="1" min="1">
-                            <button id="add-missing-item-btn" class="btn btn-primary">
+                            <button type="button" id="add-missing-item-btn" class="btn btn-primary">
                                 <i class="fas fa-plus"></i> Add
                             </button>
                         </div>
@@ -746,6 +746,7 @@
                 
                 // Decrease button
                 const decreaseBtn = document.createElement('button');
+                decreaseBtn.type = 'button';
                 decreaseBtn.className = 'btn btn-sm btn-outline-secondary';
                 decreaseBtn.innerHTML = '<i class="fas fa-minus"></i>';
                 decreaseBtn.onclick = () => updateItemCount(item, -1);
@@ -757,12 +758,14 @@
                 
                 // Increase button
                 const increaseBtn = document.createElement('button');
+                increaseBtn.type = 'button';
                 increaseBtn.className = 'btn btn-sm btn-outline-secondary';
                 increaseBtn.innerHTML = '<i class="fas fa-plus"></i>';
                 increaseBtn.onclick = () => updateItemCount(item, 1);
                 
                 // Remove button
                 const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
                 removeBtn.className = 'btn btn-sm btn-danger ml-2';
                 removeBtn.innerHTML = '<i class="fas fa-trash"></i>';
                 removeBtn.onclick = () => removeInventoryItem(item);
@@ -992,6 +995,7 @@
                 
                 // Add remove button
                 const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
                 removeBtn.className = 'btn btn-sm btn-danger';
                 removeBtn.innerHTML = '<i class="fas fa-trash"></i>';
                 removeBtn.onclick = () => removeInventoryItem(food);
@@ -1064,6 +1068,7 @@
             countControl.className = 'count-control';
             
             const decreaseBtn = document.createElement('button');
+            decreaseBtn.type = 'button';
             decreaseBtn.className = 'btn btn-sm btn-outline-secondary';
             decreaseBtn.innerHTML = '<i class="fas fa-minus"></i>';
             decreaseBtn.onclick = () => updateItemCount(foodName, -1);
@@ -1073,6 +1078,7 @@
             countDisplay.textContent = initialCount;
             
             const increaseBtn = document.createElement('button');
+            increaseBtn.type = 'button';
             increaseBtn.className = 'btn btn-sm btn-outline-secondary';
             increaseBtn.innerHTML = '<i class="fas fa-plus"></i>';
             increaseBtn.onclick = () => updateItemCount(foodName, 1);
@@ -1154,8 +1160,8 @@
                 
                 const data = await resp.json();
                 
-                // Update the AI-verified inventory
                 if (data.results) {
+                    // Directly update inventory without verification
                     updateAIInventory(data.results);
                 } else {
                     throw new Error('No results returned from analysis');
@@ -1602,7 +1608,6 @@
                     '<h4><i class="fas fa-receipt"></i> Drag & drop a receipt here<br>or click to choose a file</h4><small class="text-muted">Accepted: JPG / PNG</small>',3000);
             }
         }
-        </script>
-        
+    </script>
 </body>
 </html>
