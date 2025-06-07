@@ -402,14 +402,25 @@ def get_gpt_similarity(item_name, inventory_items):
             return None, 0.0
 
         # Create the prompt for GPT
-        prompt = f"""Given a food item "{item_name}", which item from this list is most similar to it?
-List of items: {', '.join(inventory_names)}
+        prompt = f"""You are a precise food item matching system. Your task is to determine if the item "{item_name}" matches any item in the inventory list.
+
+Inventory items: {', '.join(inventory_names)}
+
+IMPORTANT RULES:
+1. Only match items that are DEFINITELY the same food item, even if named differently
+2. DO NOT match items that are:
+   - Different types of the same category (e.g., "red delicious apple" ≠ "granny smith apple")
+   - Different brands of the same item (e.g., "coca cola" ≠ "pepsi")
+   - Different varieties (e.g., "whole milk" ≠ "skim milk")
+   - Different forms (e.g., "fresh tomatoes" ≠ "canned tomatoes")
+3. Only match if you are VERY confident (confidence > 0.90)
+4. If no confident match exists, return null for most_similar
 
 Return your response as a JSON object with this exact structure:
 {{
-    "most_similar": "item_name",
+    "most_similar": "item_name or null",
     "confidence": 0.95,
-    "reason": "brief explanation"
+    "reason": "detailed explanation of why these items are definitely the same"
 }}
 
 Only return the JSON object, no other text. The confidence should be between 0 and 1."""
@@ -434,7 +445,10 @@ Only return the JSON object, no other text. The confidence should be between 0 a
         logger.info(f"GPT Similarity Response - Raw: {response.choices[0].message.content}")
         logger.info(f"GPT Similarity Response - Parsed: {result}")
         
-        return result["most_similar"], result["confidence"]
+        # Only return a match if confidence is very high
+        if result.get("most_similar") and result.get("confidence", 0) >= 0.80:
+            return result["most_similar"], result["confidence"]
+        return None, 0.0
 
     except Exception as e:
         logger.error(f"Error in GPT similarity matching: {e}")
