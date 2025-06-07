@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 # Configure Socket.IO with explicit settings
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
-model = YOLO("model/food_detector_small.pt") 
+model = YOLO("model/food_detector_small.pt")
 
 menu = {
     'banana': 5,
@@ -36,6 +36,9 @@ menu = {
     'spaghetti': 10,
     'white rice': 5
 }
+
+# Simple inventory storage
+inventory = {}
 
 # Global variable for the camera
 camera = cv2.VideoCapture(0)
@@ -59,6 +62,32 @@ def capture_detection_screenshot(frame, class_name, track_id):
         'timestamp': time.time()
     }
 
+# --------------------------------- INVENTORY ---------------------------------
+def add_to_inventory(label):
+    """Increase count of label and emit updated inventory."""
+    cnt = inventory.get(label, {'count': 0})
+    cnt['count'] = cnt.get('count', 0) + 1
+    cnt['last_updated'] = time.time()
+    inventory[label] = cnt
+    emit_inventory()
+
+def remove_from_inventory(label):
+    """Decrease count of label if present and emit update."""
+    if label in inventory:
+        inventory[label]['count'] -= 1
+        if inventory[label]['count'] <= 0:
+            del inventory[label]
+        else:
+            inventory[label]['last_updated'] = time.time()
+        emit_inventory()
+
+def emit_inventory():
+    """Send current inventory to all clients."""
+    socketio.emit('inventory_update', {
+        'inventory': inventory,
+        'timestamp': time.time()
+    })
+
 def detect_objects(frame):
     """
     Your existing object detection function
@@ -71,6 +100,11 @@ def detect_objects(frame):
 @socketio.on('connect')
 def handle_connect():
     logger.info('Client connected')
+    emit_inventory()
+
+@socketio.on('request_inventory')
+def handle_request_inventory():
+    emit_inventory()
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -180,23 +214,23 @@ def generate_frames():
                     if last_center_x < edge_threshold:
                         log_message = f"input ({class_name})"
                         logger.info(log_message)
-                        # Emit movement event to frontend
+                        add_to_inventory(class_name)
                         try:
                             socketio.emit('movement_event', {'type': 'input', 'item': class_name, 'message': log_message})
                             logger.debug(f"Successfully emitted input event for {class_name}")
                         except Exception as e:
                             logger.error(f'Failed to emit input event: {str(e)}')
-                        del tracked_objects[track_id] # Remove from tracking
+                        del tracked_objects[track_id]
                     elif last_center_x > frame_width - edge_threshold:
                         log_message = f"output ({class_name})"
                         logger.info(log_message)
-                        # Emit movement event to frontend
+                        remove_from_inventory(class_name)
                         try:
                             socketio.emit('movement_event', {'type': 'output', 'item': class_name, 'message': log_message})
                             logger.debug(f"Successfully emitted output event for {class_name}")
                         except Exception as e:
                             logger.error(f'Failed to emit output event: {str(e)}')
-                        del tracked_objects[track_id] # Remove from tracking
+                        del tracked_objects[track_id]
                     # Optional: Handle objects disappearing elsewhere or cleanup old tracks
                     # elif time.time() - track_info['last_seen'] > 1.0: # Remove if unseen for 1 sec
                         # logger.debug(f"Track {track_id} ({class_name}) timed out.")
