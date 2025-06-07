@@ -381,7 +381,7 @@ def add_placeholder(direction,img_bgr,track_hash):
         "last_updated": time.time()
     }
     inventory_items.append(itm)
-    emit_inventory()
+    # emit_inventory()
     # Automatically trigger GPT analysis in the background
     socketio.start_background_task(process_pending_item, itm)
 
@@ -791,6 +791,7 @@ def generate_frames():
 
         _,buf=cv2.imencode(".jpg",frame_zoom)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'+buf.tobytes()+b'\r\n')
+        socketio.sleep(0) 
     cap.release()
 
 # ------------------------------- FLASK ROUTES ------------------------------
