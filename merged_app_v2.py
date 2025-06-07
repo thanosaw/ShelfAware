@@ -30,8 +30,8 @@ TRACK_HISTORY     = 10
 STABLE_FRAMES     = 3        # min frames before item track is "stable"
 EMIT_INTERVAL     = 0.5
 PERSON_CLS_ID     = 0
-CROP_SCALE        = 4
-CROP_MIN_PAD      = 100
+CROP_SCALE        = 6
+CROP_MIN_PAD      = 150
 # --- confidence gates -------------------------------------------------
 NEAR_HAND_DIST   = 120      # px – centre‑to‑centre to call it "in hand"
 CONF_NEAR_HAND   = 0.25     # accept weak box if it's near a hand
@@ -58,8 +58,8 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet",
 
 yolo_obj = YOLO("yolov8n.pt")
 mp_hands = mp.solutions.hands.Hands(max_num_hands=2, model_complexity=0,
-                                    min_detection_confidence=0.45,
-                                    min_tracking_confidence=0.45)
+                                    min_detection_confidence=0.5,
+                                    min_tracking_confidence=0.5)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 pytesseract.pytesseract.tesseract_cmd = os.getenv("TESSERACT_CMD")
 assert pytesseract.pytesseract.tesseract_cmd, "TESSERACT_CMD is not set!"
