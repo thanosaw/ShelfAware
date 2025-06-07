@@ -454,42 +454,44 @@ def finalize_out(label,itm):
 def dy(hist): return 0 if len(hist)<2 else hist[-1][1]-hist[-2][1]
 
 # --------------------------- UPDATE HAND TRACKS ----------------------------
-def update_hand_side(tid,center,w,h,frame):
-    tr=hand_tracks[tid]
-    prev=tr["side"]; new="below" if below_curve(center,w,h) else "above"
-    tr["side"]=new; tr["hist"].append((*center,time.time()))
-    if len(tr["hist"])>TRACK_HISTORY: tr["hist"].pop(0)
-    v=dy(tr["hist"])
+# ────────────── UPDATE THIS WHOLE FUNCTION ───────────────────────────────
+def update_hand_side(tid, center, w, h, frame):
+    tr   = hand_tracks[tid]
+    prev = tr["side"]
+    new  = "below" if below_curve(center, w, h) else "above"
 
-    # ----- crossing detection --------------------------------------------
-    if prev=="above" and new=="below" and v>2 and not tr["flag"]:
-        logger.info("Detected potential item entry - checking for nearby items")
-        # look for nearby item track
-        near=[it for it in item_tracks.values()
-              if math.hypot(center[0]-it["center"][0], center[1]-it["center"][1])<HAND_ITEM_DIST
-              and not it.get("processed", False)]
-        if near:
-            logger.info("Found nearby item")
-            crop=big_crop(near[0]["box"],frame)
-            play_sound(ADD_SOUND)  # Play sound when we crop
-            add_placeholder("in",crop,dhash(crop))
-            tr["flag"]=True
-            near[0]["processed"] = True
-        else:
-            logger.info("No nearby items found for entry")
-    if prev=="below" and new=="above" and v<-2 and not tr["flag"]:
-        near=[it for it in item_tracks.values()
-              if math.hypot(center[0]-it["center"][0], center[1]-it["center"][1])<HAND_ITEM_DIST
-              and not it.get("processed", False)]
-        if near:
-            crop=big_crop(near[0]["box"],frame)
-            play_sound(REMOVE_SOUND)  # Play sound when we crop
-            add_placeholder("out",crop,dhash(crop))
-            tr["flag"]=True
-            near[0]["processed"] = True
+    tr["side"] = new
+    tr["hist"].append((*center, time.time()))
+    if len(tr["hist"]) > TRACK_HISTORY:
+        tr["hist"].pop(0)
 
-    # reset flag when object returns to original side
-    if prev!=new and abs(v)<1: tr["flag"]=False
+    v = dy(tr["hist"])          # positive = moving down, negative = moving up
+
+    # ---------------------------------------------------------------------
+    # 1. HAND GOES *IN*  (crosses from above → below)
+    # ---------------------------------------------------------------------
+    if prev == "above" and new == "below" and v > 2 and not tr["flag"]:
+        crop = big_crop(tr["box"], frame)           # crop around the hand box
+        play_sound(ADD_SOUND)
+        add_placeholder("in", crop, dhash(crop))
+        tr["flag"] = True                           # prevent double‑fire until reset
+
+    # ---------------------------------------------------------------------
+    # 2. HAND COMES *OUT* (crosses from below → above)
+    # ---------------------------------------------------------------------
+    elif prev == "below" and new == "above" and v < -2 and not tr["flag"]:
+        crop = big_crop(tr["box"], frame)
+        play_sound(REMOVE_SOUND)
+        add_placeholder("out", crop, dhash(crop))
+        tr["flag"] = True
+
+    # ---------------------------------------------------------------------
+    # 3. RESET the one‑shot flag once the hand returns to its original side
+    #    (prevents continuous firing while the hand is on the same side)
+    # ---------------------------------------------------------------------
+    if prev != new and abs(v) < 1:
+        tr["flag"] = False
+
 
 # --------------------------- UPDATE ITEM TRACKS ---------------------------
 def update_item_side(tid,center,w,h,frame):
