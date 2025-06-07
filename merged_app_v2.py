@@ -576,7 +576,7 @@ def update_item_side(tid,center,w,h,frame):
 
 # --------------------------- MAIN VIDEO LOOP -------------------------------
 def generate_frames():
-    cap=cv2.VideoCapture(1)
+    cap=cv2.VideoCapture(0)
     if not cap.isOpened(): logger.error("cam?"); return
     last_emit=0
     while True:
@@ -756,6 +756,15 @@ def analyze_inventory():
                 lbl = parsed["items"][0]["name"].lower().strip()
                 conf = round(float(parsed["items"][0]["confidence"])*100)
                 
+                # If the item is identified as 'non-food item', skip adding it
+                if lbl == 'non-food item':
+                    logger.info(f"Skipping non-food item: {lbl}")
+                    # Remove the pending placeholder item from inventory_items
+                    if itm in inventory_items:
+                        inventory_items.remove(itm)
+                        emit_inventory() # Emit update after removing the placeholder
+                    continue # Skip the rest of the processing for this item
+
                 # Get expiration data for the item
                 expiration_prompt = f"What is the typical shelf life in days for {lbl} when stored properly? Return only a number."
                 expiration_response = client.chat.completions.create(
