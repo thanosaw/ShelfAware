@@ -393,6 +393,53 @@ def finalize_in(label,itm):
     update_detection_log("added", label, 1, itm.get('confidence'))
     emit_inventory()
 
+def get_gpt_similarity(item_name, inventory_items):
+    """Query GPT to find the most similar item in inventory"""
+    try:
+        # Create a list of inventory items for comparison
+        inventory_names = [itm["label"] for itm in inventory_items if not itm["pending"] and itm["direction"] == "in"]
+        if not inventory_names:
+            return None, 0.0
+
+        # Create the prompt for GPT
+        prompt = f"""Given a food item "{item_name}", which item from this list is most similar to it?
+List of items: {', '.join(inventory_names)}
+
+Return your response as a JSON object with this exact structure:
+{{
+    "most_similar": "item_name",
+    "confidence": 0.95,
+    "reason": "brief explanation"
+}}
+
+Only return the JSON object, no other text. The confidence should be between 0 and 1."""
+
+        # Log the query
+        logger.info(f"GPT Similarity Query - Item: {item_name}")
+        logger.info(f"GPT Similarity Query - Inventory: {inventory_names}")
+        logger.info(f"GPT Similarity Query - Full prompt: {prompt}")
+
+        # Query GPT
+        response = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            max_tokens=150
+        )
+
+        # Parse the response
+        result = json.loads(response.choices[0].message.content)
+        
+        # Log the response
+        logger.info(f"GPT Similarity Response - Raw: {response.choices[0].message.content}")
+        logger.info(f"GPT Similarity Response - Parsed: {result}")
+        
+        return result["most_similar"], result["confidence"]
+
+    except Exception as e:
+        logger.error(f"Error in GPT similarity matching: {e}")
+        return None, 0.0
+
 def finalize_out(label,itm):
     """Handle item removal from the fridge inventory"""
     try:
@@ -425,30 +472,17 @@ def finalize_out(label,itm):
             inventory_items.remove(item_to_remove)
             update_detection_log("removed", item_to_remove['label'], 1, item_to_remove.get('confidence'))
         else:
-            # If no exact match, try fuzzy matching with improved similarity
-            best, best_s = None, 0
-            for cand in inventory_items:
-                if cand["pending"] or cand["direction"] != "in":
-                    continue
-                
-                # Calculate similarity using both name and image hash
-                name_sim_score = name_sim(label, cand["label"])
-                hash_sim_score = 1 - (hamming(itm["hash"], cand["hash"]) / 64) if "hash" in itm and "hash" in cand else 0
-                
-                # Weight the scores (80% name similarity, 20% image hash)
-                total_score = (0.8 * name_sim_score) + (0.2 * hash_sim_score)
-                
-                logger.info(f"Comparing '{label}' with '{cand['label']}': name_sim={name_sim_score:.2f}, hash_sim={hash_sim_score:.2f}, total={total_score:.2f}")
-                
-                if total_score > best_s:
-                    best, best_s = cand, total_score
-                    logger.info(f"Found potential match: {cand['label']} with score {total_score:.2f}")
+            # If no exact match, try GPT-based matching
+            best_match, confidence = get_gpt_similarity(label, inventory_items)
             
-            # Lower the threshold for matching to 0.60
-            if best_s >= 0.60:
-                logger.info(f"Removing fuzzy-matched item: {best['label']} (score: {best_s:.2f})")
-                inventory_items.remove(best)
-                update_detection_log("removed", best['label'], 1, best.get('confidence'))
+            if best_match and confidence >= 0.60:  # Using 0.60 as threshold
+                # Find the matching item in inventory
+                for cand in inventory_items:
+                    if cand["label"].lower() == best_match.lower() and not cand["pending"] and cand["direction"] == "in":
+                        logger.info(f"Removing GPT-matched item: {cand['label']} (confidence: {confidence:.2f})")
+                        inventory_items.remove(cand)
+                        update_detection_log("removed", cand['label'], 1, cand.get('confidence'))
+                        break
             else:
                 logger.warning(f"No good match found for removal of {label}")
 
