@@ -3,7 +3,6 @@
 #  Fusion fridge‑tracker: hands + YOLO item tracker + GPT identification
 # ---------------------------------------------------------------------------
 import os, time, math, logging, base64, json, itertools, uuid, difflib, re
-import threading
 from collections import defaultdict
 import numpy as np, cv2
 from flask import Flask, render_template, Response, jsonify, request
@@ -349,13 +348,18 @@ def emit_inventory(source=None):
         agg[it["label"]]["added_timestamp"] = it.get("added_timestamp")
         agg[it["label"]]["last_updated"] = it.get("last_updated")
 
-    socketio.emit("inventory_update",
-                  {"inventory": agg,
-                   "timestamp": time.time(),
-                   "source": source})
+    socketio.emit(
+        "inventory_update",
+        {"inventory": dict(agg), "timestamp": time.time(), "source": source},
+    )
 
 @socketio.on("connect")
 def _on_connect(): emit_inventory()
+
+# Allow clients to request the latest inventory
+@socketio.on("request_inventory")
+def _on_request_inventory():
+    emit_inventory()
 
 # --------------------------- BOUNDARY CURVE --------------------------------
 def parabola_y(x,w,h): return VERTEX_Y + 4*(h-VERTEX_Y)/(w**2)*(x-w/2)**2
@@ -386,8 +390,8 @@ def add_placeholder(direction,img_bgr,track_hash):
     }
     inventory_items.append(itm)
     emit_inventory()
-    # Automatically trigger GPT analysis in a separate OS thread
-    threading.Thread(target=process_pending_item, args=(itm,), daemon=True).start()
+    # Automatically trigger GPT analysis in the background
+    socketio.start_background_task(process_pending_item, itm)
 
 def finalize_in(label,itm):
     itm.update({
