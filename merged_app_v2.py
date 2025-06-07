@@ -23,11 +23,11 @@ load_dotenv()
 VERTEX_Y          = 450
 ZOOM_FACTOR       = 1.0
 CONF_THRESHOLD    = 0.35
-MAX_LOST_FRAMES   = 5
-MAX_TRACK_DIST    = 250      # hand–hand & item–item association radius
+MAX_LOST_FRAMES   = 10
+MAX_TRACK_DIST    = 400      # hand–hand & item–item association radius
 HAND_ITEM_DIST    = 250      # hand–item fusion radius
 TRACK_HISTORY     = 10
-STABLE_FRAMES     = 3        # min frames before item track is "stable"
+STABLE_FRAMES     = 1        # min frames before item track is "stable"
 EMIT_INTERVAL     = 0.5
 PERSON_CLS_ID     = 0
 CROP_SCALE        = 6
@@ -413,7 +413,7 @@ IMPORTANT RULES:
    - Different brands of the same item (e.g., "coca cola" ≠ "pepsi")
    - Different varieties (e.g., "whole milk" ≠ "skim milk")
    - Different forms (e.g., "fresh tomatoes" ≠ "canned tomatoes")
-3. Only match if you are VERY confident (confidence > 0.90)
+3. Only match if you are VERY confident (confidence > 0.80)
 4. If no confident match exists, return null for most_similar
 
 Return your response as a JSON object with this exact structure:
@@ -590,7 +590,7 @@ def update_item_side(tid,center,w,h,frame):
 
 # --------------------------- MAIN VIDEO LOOP -------------------------------
 def generate_frames():
-    cap=cv2.VideoCapture(0)
+    cap=cv2.VideoCapture(1)
     if not cap.isOpened(): logger.error("cam?"); return
     last_emit=0
     while True:
