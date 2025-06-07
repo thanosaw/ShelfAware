@@ -3,6 +3,7 @@
 #  Fusion fridge‑tracker: hands + YOLO item tracker + GPT identification
 # ---------------------------------------------------------------------------
 import os, time, math, logging, base64, json, itertools, uuid, difflib, re
+import threading
 from collections import defaultdict
 import numpy as np, cv2
 from flask import Flask, render_template, Response, jsonify, request
@@ -382,8 +383,8 @@ def add_placeholder(direction,img_bgr,track_hash):
     }
     inventory_items.append(itm)
     emit_inventory()
-    # Automatically trigger GPT analysis in the background
-    socketio.start_background_task(process_pending_item, itm)
+    # Automatically trigger GPT analysis in a separate OS thread
+    threading.Thread(target=process_pending_item, args=(itm,), daemon=True).start()
 
 def finalize_in(label,itm):
     itm.update({

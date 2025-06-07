@@ -635,6 +635,7 @@
         // Request an inventory update when connected
         socket.on('connect', () => {
             socket.emit('request_inventory');
+            if (!isStreaming) startStream();
         });
 
         document.getElementById("toggle-stream").addEventListener("click", () => {
