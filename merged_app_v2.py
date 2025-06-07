@@ -30,6 +30,7 @@ HAND_ITEM_DIST    = 250      # hand–item fusion radius
 TRACK_HISTORY     = 10
 STABLE_FRAMES     = 1        # min frames before item track is "stable"
 EMIT_INTERVAL     = 0.5
+INVENTORY_REFRESH_INTERVAL = 3.0  # seconds between inventory refreshes
 PERSON_CLS_ID     = 0
 CROP_SCALE        = 6
 CROP_MIN_PAD      = 150
@@ -323,6 +324,9 @@ def bulk_add(label:str, qty:int, confidence:float=100.0, expiration_days:int=Non
 
 def emit_inventory(source=None):
     """Aggregate items then push to every client."""
+    start_time = time.time()
+    logger.info(f"Starting inventory emit (source: {source})")
+    
     global inventory_items  # Ensure we're using the global variable
     if not isinstance(inventory_items, list):
         inventory_items = []  # Reset if somehow corrupted
@@ -337,6 +341,11 @@ def emit_inventory(source=None):
         "last_updated": None
     })
     
+    # Log inventory state
+    logger.info(f"Current inventory size: {len(inventory_items)} items")
+    pending_count = sum(1 for it in inventory_items if it.get("pending"))
+    logger.info(f"Pending items: {pending_count}")
+    
     for it in inventory_items:
         agg[it["label"]]["count"] += 1
         if it.get("pending"):
@@ -349,13 +358,54 @@ def emit_inventory(source=None):
         agg[it["label"]]["added_timestamp"] = it.get("added_timestamp")
         agg[it["label"]]["last_updated"] = it.get("last_updated")
 
-    socketio.emit("inventory_update",
-                  {"inventory": agg,
-                   "timestamp": time.time(),
-                   "source": source})
+    # Log aggregation results
+    logger.info(f"Aggregated {len(agg)} unique items")
+    
+    try:
+        socketio.emit("inventory_update",
+                      {"inventory": agg,
+                       "timestamp": time.time(),
+                       "source": source})
+        end_time = time.time()
+        logger.info(f"Inventory emit completed in {end_time - start_time:.3f} seconds")
+    except Exception as e:
+        logger.error(f"Failed to emit inventory update: {e}")
+        raise
 
 @socketio.on("connect")
-def _on_connect(): emit_inventory()
+def _on_connect(): 
+    logger.info("New client connected, sending initial inventory")
+    emit_inventory()
+    # Start periodic inventory refresh
+    logger.info("Starting periodic inventory refresh task")
+    socketio.start_background_task(periodic_inventory_refresh)
+
+@socketio.on("request_fresh_inventory")
+def handle_fresh_inventory():
+    """Handle client request for a fresh inventory state."""
+    logger.info("Client requested fresh inventory state")
+    emit_inventory(source="fresh_request")
+
+def periodic_inventory_refresh():
+    """Background task to periodically emit inventory updates."""
+    logger.info("Periodic inventory refresh task started")
+    last_refresh = time.time()
+    
+    while True:
+        try:
+            current_time = time.time()
+            time_since_last = current_time - last_refresh
+            logger.info(f"Periodic refresh: {time_since_last:.1f} seconds since last refresh")
+            
+            socketio.sleep(INVENTORY_REFRESH_INTERVAL)
+            # Instead of emitting directly, request clients to ask for fresh state
+            socketio.emit("request_fresh_state")
+            last_refresh = time.time()
+            
+        except Exception as e:
+            logger.error(f"Error in periodic inventory refresh: {e}")
+            # Don't break the loop on error, just log and continue
+            socketio.sleep(INVENTORY_REFRESH_INTERVAL)
 
 # --------------------------- BOUNDARY CURVE --------------------------------
 def parabola_y(x,w,h): return VERTEX_Y + 4*(h-VERTEX_Y)/(w**2)*(x-w/2)**2
@@ -516,7 +566,11 @@ def finalize_out(label,itm):
 def process_pending_item(itm):
     """Run GPT analysis on a single pending inventory item."""
     try:
+        start_time = time.time()
+        logger.info("Starting GPT analysis for pending item")
+        
         if not itm.get("image"):
+            logger.warning("No image found for pending item")
             return None
 
         prompt = (
@@ -527,6 +581,7 @@ def process_pending_item(itm):
             "Return strict JSON as {\"items\":[{\"name\":\"<item>\",\"confidence\":<0-1>}]}"
         )
 
+        logger.info("Sending image to GPT for analysis")
         gpt = client.chat.completions.create(
             model="gpt-4.1",
             messages=[
@@ -545,19 +600,26 @@ def process_pending_item(itm):
             max_tokens=300,
         )
 
+        gpt_time = time.time()
+        logger.info(f"GPT response received in {gpt_time - start_time:.3f} seconds")
+
         parsed = json.loads(gpt.choices[0].message.content)
         if not parsed.get("items"):
+            logger.warning("No items found in GPT response")
             return None
 
         lbl = parsed["items"][0]["name"].lower().strip()
         conf = round(float(parsed["items"][0]["confidence"])*100)
+        logger.info(f"GPT identified item as: {lbl} (confidence: {conf}%)")
 
         if lbl == "non-food item":
+            logger.info("Item identified as non-food, removing from inventory")
             if itm in inventory_items:
                 inventory_items.remove(itm)
                 emit_inventory()
             return None
 
+        logger.info("Getting expiration information")
         expiration_prompt = (
             f"What is the typical shelf life in days for {lbl} when stored properly? Return only a number."
         )
@@ -568,8 +630,23 @@ def process_pending_item(itm):
         )
         try:
             expiration_days = int(expiration_response.choices[0].message.content.strip())
+            logger.info(f"Expiration days: {expiration_days}")
         except (ValueError, AttributeError):
             expiration_days = None
+            logger.warning("Failed to parse expiration days")
+
+        # Update item properties immediately after getting GPT response
+        logger.info("Updating item properties")
+        itm.update({
+            "label": lbl,
+            "confidence": conf,
+            "expiration_days": expiration_days,
+            "last_updated": time.time()
+        })
+        
+        # Emit inventory update to reflect the new label immediately
+        logger.info("Emitting inventory update")
+        emit_inventory()
 
         result = {
             "food": lbl,
@@ -579,18 +656,14 @@ def process_pending_item(itm):
         }
 
         if itm.get("direction") == "in":
+            logger.info("Finalizing item as 'in'")
             finalize_in(lbl, itm)
         else:
+            logger.info("Finalizing item as 'out'")
             finalize_out(lbl, itm)
 
-        itm.update(
-            {
-                "confidence": conf,
-                "expiration_days": expiration_days,
-                "last_updated": time.time(),
-            }
-        )
-
+        end_time = time.time()
+        logger.info(f"Item processing completed in {end_time - start_time:.3f} seconds")
         return result
 
     except Exception as e:
