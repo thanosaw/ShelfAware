@@ -367,7 +367,7 @@ def big_crop(box, frame):
     return frame[ny1:ny2,nx1:nx2]
 
 def add_placeholder(direction,img_bgr,track_hash):
-    inventory_items.append({
+    itm = {
         "id": uuid.uuid4().hex,
         "label": "unknown",
         "pending": True,
@@ -379,8 +379,11 @@ def add_placeholder(direction,img_bgr,track_hash):
         "expiration_days": None,
         "added_timestamp": time.time(),
         "last_updated": time.time()
-    })
+    }
+    inventory_items.append(itm)
     emit_inventory()
+    # Automatically trigger GPT analysis in the background
+    socketio.start_background_task(process_pending_item, itm)
 
 def finalize_in(label,itm):
     itm.update({
@@ -505,6 +508,90 @@ def finalize_out(label,itm):
                 logger.info("Removed temporary item after error")
         except Exception as e2:
             logger.error(f"Failed to remove temporary item: {e2}")
+
+def process_pending_item(itm):
+    """Run GPT analysis on a single pending inventory item."""
+    try:
+        if not itm.get("image"):
+            return None
+
+        prompt = (
+            "You are an image inventory assistant. Identify EVERY food or drink "
+            "item you see in the image. Ignore hands and background. Provide "
+            "a short, direct answer with just the item name for each detected "
+            "item. If it's not a food or drink item, respond with 'non-food item'. "
+            "Return strict JSON as {\"items\":[{\"name\":\"<item>\",\"confidence\":<0-1>}]}"
+        )
+
+        gpt = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{itm['image']}"},
+                        },
+                    ],
+                }
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=300,
+        )
+
+        parsed = json.loads(gpt.choices[0].message.content)
+        if not parsed.get("items"):
+            return None
+
+        lbl = parsed["items"][0]["name"].lower().strip()
+        conf = round(float(parsed["items"][0]["confidence"])*100)
+
+        if lbl == "non-food item":
+            if itm in inventory_items:
+                inventory_items.remove(itm)
+                emit_inventory()
+            return None
+
+        expiration_prompt = (
+            f"What is the typical shelf life in days for {lbl} when stored properly? Return only a number."
+        )
+        expiration_response = client.chat.completions.create(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": expiration_prompt}],
+            max_tokens=10,
+        )
+        try:
+            expiration_days = int(expiration_response.choices[0].message.content.strip())
+        except (ValueError, AttributeError):
+            expiration_days = None
+
+        result = {
+            "food": lbl,
+            "confidence": conf,
+            "image": itm.get("image"),
+            "expiration_days": expiration_days,
+        }
+
+        if itm.get("direction") == "in":
+            finalize_in(lbl, itm)
+        else:
+            finalize_out(lbl, itm)
+
+        itm.update(
+            {
+                "confidence": conf,
+                "expiration_days": expiration_days,
+                "last_updated": time.time(),
+            }
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error processing pending item: {e}")
+        return None
 
 # --------------------------- DY / MOTION -----------------------------------
 def dy(hist): return 0 if len(hist)<2 else hist[-1][1]-hist[-2][1]
@@ -730,75 +817,18 @@ def analyze_inventory():
 
         results = {}
         pending_items = [itm for itm in inventory_items if itm.get("pending", False)]
-        
+
         if not pending_items:
-            # If no pending items, analyze all non-pending items instead
             pending_items = [itm for itm in inventory_items if not itm.get("pending", False)]
             if not pending_items:
                 return jsonify({"results": {}})
 
         for itm in pending_items:
-            if not itm.get("image"):  # Skip items without images
-                continue
-                
-            try:
-                gpt = client.chat.completions.create(
-                    model="gpt-4.1",
-                    messages=[{"role":"user","content":[
-                        {"type":"text","text":prompt},
-                        {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{itm['image']}"}}]}],
-                    response_format={"type":"json_object"},max_tokens=300)
-                
-                parsed = json.loads(gpt.choices[0].message.content)
-                if not parsed.get("items"): 
-                    continue
-                    
-                lbl = parsed["items"][0]["name"].lower().strip()
-                conf = round(float(parsed["items"][0]["confidence"])*100)
-                
-                # If the item is identified as 'non-food item', skip adding it
-                if lbl == 'non-food item':
-                    logger.info(f"Skipping non-food item: {lbl}")
-                    # Remove the pending placeholder item from inventory_items
-                    if itm in inventory_items:
-                        inventory_items.remove(itm)
-                        emit_inventory() # Emit update after removing the placeholder
-                    continue # Skip the rest of the processing for this item
+            result = process_pending_item(itm)
+            if result:
+                lbl = result["food"]
+                results.setdefault(lbl, []).append(result)
 
-                # Get expiration data for the item
-                expiration_prompt = f"What is the typical shelf life in days for {lbl} when stored properly? Return only a number."
-                expiration_response = client.chat.completions.create(
-                    model="gpt-4.1",
-                    messages=[{"role":"user","content":expiration_prompt}],
-                    max_tokens=10
-                )
-                try:
-                    expiration_days = int(expiration_response.choices[0].message.content.strip())
-                except (ValueError, AttributeError):
-                    expiration_days = None
-                
-                results.setdefault(lbl,[]).append({
-                    "food": lbl,
-                    "confidence": conf,
-                    "image": itm["image"],
-                    "expiration_days": expiration_days
-                })
-                
-                if itm.get("direction")=="in":
-                    finalize_in(lbl,itm)
-                    # Update the item's metadata
-                    itm.update({
-                        "confidence": conf,
-                        "expiration_days": expiration_days,
-                        "last_updated": time.time()
-                    })
-                else:
-                    finalize_out(lbl,itm)
-                    
-            except Exception as e:
-                logger.error(f"Error processing item: {e}")
-                continue
-                
         return jsonify({"results":results})
     except Exception as e:
         logger.error(f"Error in analyze_inventory: {e}")

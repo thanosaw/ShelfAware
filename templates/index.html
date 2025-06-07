@@ -325,11 +325,6 @@
         .inventory-image:hover {
             opacity: 0.8;
         }
-        .analyze-all-btn {
-            margin-left: 10px;
-            padding: 2px 8px;
-            font-size: 12px;
-        }
         .analysis-results {
             margin-top: 5px;
             padding: 5px;
@@ -530,9 +525,6 @@
                 <div class="mosaic-header">
                     <h3 class="mb-0">Current Inventory</h3>
                     <div>
-                        <button type="button" id="analyze-all-btn" class="btn btn-primary mr-2">
-                            <i class="fas fa-robot"></i> Analyze Item
-                        </button>
                         <button type="button" id="get-recipes-btn" class="btn btn-success">
                             <i class="fas fa-utensils"></i> Get Recipes
                         </button>
@@ -657,9 +649,6 @@
         });
         socket.on('stop_stream', () => {
             stopStream(); 
-        });
-        socket.on('analyzeAllItems', () => {
-            analyzeAllItems(); 
         });
 
         // Update the inventory display function
@@ -1140,44 +1129,6 @@
                 alert('Failed to remove item: ' + e.message);
             }
         }
-
-        async function analyzeAllItems() {
-            const analyzeBtn = document.getElementById('analyze-all-btn');
-            analyzeBtn.disabled = true;
-            analyzeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
-            
-            try {
-                const resp = await fetch('/analyze_inventory', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({})
-                });
-                
-                if (!resp.ok) {
-                    const errorData = await resp.json();
-                    throw new Error(errorData.error || 'Failed to analyze items');
-                }
-                
-                const data = await resp.json();
-                
-                if (data.results) {
-                    // Directly update inventory without verification
-                    updateAIInventory(data.results);
-                } else {
-                    throw new Error('No results returned from analysis');
-                }
-                
-            } catch (e) {
-                console.error('Error analyzing inventory:', e);
-                alert(e.message || 'Failed to analyze items');
-            } finally {
-                analyzeBtn.disabled = false;
-                analyzeBtn.innerHTML = '<i class="fas fa-robot"></i> Analyze Item';
-            }
-        }
-
-        // Add event listener for the analyze all button
-        document.getElementById('analyze-all-btn').addEventListener('click', analyzeAllItems);
 
         // Add event listener for the get recipes button
         document.getElementById('get-recipes-btn').addEventListener('click', getRecipesAndExpirations);
