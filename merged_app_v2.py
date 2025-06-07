@@ -328,7 +328,6 @@ def emit_inventory(source=None):
         
     agg = defaultdict(lambda: {
         "count": 0,
-        "pending": 0,
         "images": [],
         "confidence": 0,
         "expiration_days": None,
@@ -338,8 +337,6 @@ def emit_inventory(source=None):
     
     for it in inventory_items:
         agg[it["label"]]["count"] += 1
-        if it.get("pending"):
-            agg[it["label"]]["pending"] += 1
         if it["image"]:
             agg[it["label"]]["images"].append(it["image"])
         # Update metadata with the most recent values
@@ -348,17 +345,13 @@ def emit_inventory(source=None):
         agg[it["label"]]["added_timestamp"] = it.get("added_timestamp")
         agg[it["label"]]["last_updated"] = it.get("last_updated")
 
-    socketio.emit(
-        "inventory_update",
-        {"inventory": dict(agg), "timestamp": time.time(), "source": source},
-    )
+    socketio.emit("inventory_update",
+                  {"inventory": agg,
+                   "timestamp": time.time(),
+                   "source": source})
 
 @socketio.on("connect")
-def _on_connect(): emit_inventory()
-
-# Allow clients to request the latest inventory
-@socketio.on("request_inventory")
-def _on_request_inventory():
+def _on_connect():
     emit_inventory()
 
 # --------------------------- BOUNDARY CURVE --------------------------------
@@ -799,7 +792,6 @@ def generate_frames():
 
         _,buf=cv2.imencode(".jpg",frame_zoom)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'+buf.tobytes()+b'\r\n')
-        socketio.sleep(0)
     cap.release()
 
 # ------------------------------- FLASK ROUTES ------------------------------
