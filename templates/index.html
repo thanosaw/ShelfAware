@@ -805,7 +805,8 @@
         }
 
         function updateDetectionLog(items) {
-            const detectionList = document.getElementById("detection-list");
+            const detectionList = document.getElementById("history-log");
+            if (!detectionList) return;
             const timestamp = new Date().toLocaleTimeString();
             for (const [item, count] of Object.entries(items)) {
                 if (!lastDetectedItems[item] || lastDetectedItems[item] !== count) {
