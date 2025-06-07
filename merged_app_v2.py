@@ -21,7 +21,7 @@ load_dotenv()
 
 # ------------------------------ CONSTANTS ----------------------------------
 VERTEX_Y          = 450
-ZOOM_FACTOR       = 1.1
+ZOOM_FACTOR       = 1.0
 CONF_THRESHOLD    = 0.35
 MAX_LOST_FRAMES   = 5
 MAX_TRACK_DIST    = 250      # hand–hand & item–item association radius
@@ -464,29 +464,30 @@ def update_hand_side(tid,center,w,h,frame):
     # ----- crossing detection --------------------------------------------
     if prev=="above" and new=="below" and v>2 and not tr["flag"]:
         logger.info("Detected potential item entry - checking for nearby items")
-        # look for nearby stable item track
+        # look for nearby item track
         near=[it for it in item_tracks.values()
               if math.hypot(center[0]-it["center"][0], center[1]-it["center"][1])<HAND_ITEM_DIST
-              and it["stable"] and not it.get("processed", False)]  # Add processed flag check
+              and not it.get("processed", False)]
         if near:
-            logger.info("Found nearby item - playing add sound")
+            logger.info("Found nearby item")
             crop=big_crop(near[0]["box"],frame)
+            play_sound(ADD_SOUND)  # Play sound when we crop
             add_placeholder("in",crop,dhash(crop))
-            play_sound(ADD_SOUND)  # Play sound immediately when item enters
             tr["flag"]=True
-            near[0]["processed"] = True  # Mark item as processed
+            near[0]["processed"] = True
         else:
             logger.info("No nearby items found for entry")
     if prev=="below" and new=="above" and v<-2 and not tr["flag"]:
         near=[it for it in item_tracks.values()
               if math.hypot(center[0]-it["center"][0], center[1]-it["center"][1])<HAND_ITEM_DIST
-              and it["stable"] and not it.get("processed", False)]  # Add processed flag check
+              and not it.get("processed", False)]
         if near:
             crop=big_crop(near[0]["box"],frame)
+            play_sound(REMOVE_SOUND)  # Play sound when we crop
             add_placeholder("out",crop,dhash(crop))
-            play_sound(REMOVE_SOUND)  # Play sound immediately when item exits
             tr["flag"]=True
-            near[0]["processed"] = True  # Mark item as processed
+            near[0]["processed"] = True
+
     # reset flag when object returns to original side
     if prev!=new and abs(v)<1: tr["flag"]=False
 
@@ -502,16 +503,18 @@ def update_item_side(tid,center,w,h,frame):
     v=dy(tr["hist"])
 
     # item crosses alone - only process if not already processed
-    if prev=="above" and new=="below" and v>2 and tr["stable"] and not tr["flag"] and not tr.get("processed", False):
+    if prev=="above" and new=="below" and v>2 and not tr["flag"] and not tr.get("processed", False):
         crop=big_crop(tr["box"],frame)
+        play_sound(ADD_SOUND)  # Play sound when we crop
         add_placeholder("in",crop,dhash(crop))
         tr["flag"]=True
-        tr["processed"] = True  # Mark as processed
-    if prev=="below" and new=="above" and v<-2 and tr["stable"] and not tr["flag"] and not tr.get("processed", False):
+        tr["processed"] = True
+    if prev=="below" and new=="above" and v<-2 and not tr["flag"] and not tr.get("processed", False):
         crop=big_crop(tr["box"],frame)
+        play_sound(REMOVE_SOUND)  # Play sound when we crop
         add_placeholder("out",crop,dhash(crop))
         tr["flag"]=True
-        tr["processed"] = True  # Mark as processed
+        tr["processed"] = True
 
 # --------------------------- MAIN VIDEO LOOP -------------------------------
 def generate_frames():
