@@ -20,7 +20,7 @@ import pytesseract, io, base64
 load_dotenv()
 
 # ------------------------------ CONSTANTS ----------------------------------
-VERTEX_Y          = 450
+VERTEX_Y          = 1142
 ZOOM_FACTOR       = 1.0
 CONF_THRESHOLD    = 0.35
 MAX_LOST_FRAMES   = 10
@@ -597,6 +597,7 @@ def generate_frames():
         ok,frame=cap.read()
         if not ok: break
         frame=cv2.flip(frame,1)                  # mirror
+        frame=cv2.rotate(frame,cv2.ROTATE_90_CLOCKWISE)
         # frame=cv2.resize(frame,(960,540))
         frame_zoom=digital_zoom(frame,ZOOM_FACTOR)
         h,w=frame_zoom.shape[:2]
