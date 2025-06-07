@@ -685,12 +685,20 @@
                 // Item name and count with edit button
                 const nameDiv = document.createElement('div');
                 nameDiv.className = 'inventory-item-name';
+                let label = item;
+                if (item === 'unknown') label = 'Processing...';
                 nameDiv.innerHTML = `
-                    ${item} (${data.count})
+                    ${label} (${data.count})
                     <span class="edit-name-btn" title="Edit name">
                         <i class="fas fa-edit"></i>
                     </span>
                 `;
+                if (data.pending > 0 && item !== 'unknown') {
+                    const pendingSpan = document.createElement('span');
+                    pendingSpan.className = 'text-muted ml-2';
+                    pendingSpan.textContent = `processing ${data.pending}`;
+                    nameDiv.appendChild(pendingSpan);
+                }
                 
                 // Add edit button handler
                 nameDiv.querySelector('.edit-name-btn').onclick = () => 

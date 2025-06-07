@@ -328,7 +328,8 @@ def emit_inventory(source=None):
         inventory_items = []  # Reset if somehow corrupted
         
     agg = defaultdict(lambda: {
-        "count": 0, 
+        "count": 0,
+        "pending": 0,
         "images": [],
         "confidence": 0,
         "expiration_days": None,
@@ -338,6 +339,8 @@ def emit_inventory(source=None):
     
     for it in inventory_items:
         agg[it["label"]]["count"] += 1
+        if it.get("pending"):
+            agg[it["label"]]["pending"] += 1
         if it["image"]:
             agg[it["label"]]["images"].append(it["image"])
         # Update metadata with the most recent values
@@ -792,6 +795,7 @@ def generate_frames():
 
         _,buf=cv2.imencode(".jpg",frame_zoom)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'+buf.tobytes()+b'\r\n')
+        socketio.sleep(0)
     cap.release()
 
 # ------------------------------- FLASK ROUTES ------------------------------
