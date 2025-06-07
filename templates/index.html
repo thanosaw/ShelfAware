@@ -645,6 +645,12 @@
             connectionStatus.textContent = 'Connection Error';
             connectionStatus.className = 'disconnected';
         });
+
+        // Respond when server requests a fresh state
+        socket.on('request_fresh_state', () => {
+            console.log('Server requested fresh inventory');
+            socket.emit('request_fresh_inventory');
+        });
         
         // Add periodic refresh mechanism
         let refreshInterval;
