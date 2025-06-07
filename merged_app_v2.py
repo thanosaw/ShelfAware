@@ -489,7 +489,7 @@ def finalize_out(label,itm):
             # If no exact match, try GPT-based matching
             best_match, confidence = get_gpt_similarity(label, inventory_items)
             
-            if best_match and confidence >= 0.60:  # Using 0.60 as threshold
+            if best_match and confidence >= 0.80:  # Using 0.80 as threshold
                 # Find the matching item in inventory
                 for cand in inventory_items:
                     if cand["label"].lower() == best_match.lower() and not cand["pending"] and cand["direction"] == "in":
