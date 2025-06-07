@@ -20,7 +20,7 @@ import pytesseract, io, base64
 load_dotenv()
 
 # ------------------------------ CONSTANTS ----------------------------------
-VERTEX_Y          = 1142
+VERTEX_Y          = 450
 ZOOM_FACTOR       = 1.0
 CONF_THRESHOLD    = 0.35
 MAX_LOST_FRAMES   = 10
@@ -402,7 +402,7 @@ def get_gpt_similarity(item_name, inventory_items):
             return None, 0.0
 
         # Create the prompt for GPT
-        prompt = f"""Given a food item "{item_name}", which item from this list is most similar to it?
+        prompt = f"""Given a food item "{item_name}", which item from this list is most similar to it? Ensure the items can reasonably be considered the same item, not just related to each other. If no matches make sense, indicate so.
 List of items: {', '.join(inventory_names)}
 
 Return your response as a JSON object with this exact structure:
@@ -583,7 +583,6 @@ def generate_frames():
         ok,frame=cap.read()
         if not ok: break
         frame=cv2.flip(frame,1)                  # mirror
-        frame=cv2.rotate(frame,cv2.ROTATE_90_CLOCKWISE)
         # frame=cv2.resize(frame,(960,540))
         frame_zoom=digital_zoom(frame,ZOOM_FACTOR)
         h,w=frame_zoom.shape[:2]
