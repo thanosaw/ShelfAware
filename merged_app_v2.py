@@ -740,7 +740,7 @@ def update_item_side(tid,center,w,h,frame):
 
 # --------------------------- MAIN VIDEO LOOP -------------------------------
 def generate_frames():
-    cap=cv2.VideoCapture(0)
+    cap=cv2.VideoCapture(1)
     if not cap.isOpened(): logger.error("cam?"); return
     last_emit=0
     while True:
