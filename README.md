@@ -37,7 +37,7 @@ source .venv/bin/activate  # On Windows, use: .venv\Scripts\activate
 
 2. Start the Flask application:
 ```bash
-python app.py
+python merged_app_v2.py
 ```
 
 3. Open your web browser and navigate to:
