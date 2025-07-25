@@ -362,10 +362,11 @@ def emit_inventory(source=None):
     logger.info(f"Aggregated {len(agg)} unique items")
     
     try:
-        socketio.emit("inventory_update",
-                      {"inventory": agg,
-                       "timestamp": time.time(),
-                       "source": source})
+        socketio.emit(
+            "inventory_update",
+            {"inventory": agg, "timestamp": time.time(), "source": source},
+            broadcast=True,
+        )
         end_time = time.time()
         logger.info(f"Inventory emit completed in {end_time - start_time:.3f} seconds")
     except Exception as e:
