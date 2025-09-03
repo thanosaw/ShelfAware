@@ -1037,14 +1037,33 @@
                     const saveBtn = inputDiv.querySelector('button');
                     const input = inputDiv.querySelector('input');
                     
-                    saveBtn.addEventListener('click', () => {
-                        const newName = input.value.trim();
-                        if (newName) {
+                    saveBtn.addEventListener('click', async () => {
+                        const newName = input.value.trim().toLowerCase();
+                        if (!newName) return;
+
+                        try {
+                            const resp = await fetch('/update_item_name', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({
+                                    old_name: 'unknown',
+                                    new_name: newName
+                                })
+                            });
+
+                            if (!resp.ok) throw await resp.json();
+
+                            // Add to history log
+                            addToHistory('renamed', `unknown → ${newName}`, 1, null, null);
+
                             itemDiv.dataset.foodName = newName;
                             header.querySelector('span').textContent = newName;
                             inputDiv.remove();
                             itemDiv.classList.remove('unknown-item');
                             addInventoryControls(itemDiv, newName, data.count);
+                        } catch (e) {
+                            console.error('Error renaming item:', e);
+                            alert('Failed to rename item');
                         }
                     });
                     
