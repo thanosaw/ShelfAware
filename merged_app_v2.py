@@ -8,6 +8,7 @@ import numpy as np, cv2
 from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO
 from ultralytics import YOLO
+import torch
 import mediapipe as mp
 from openai import OpenAI
 import subprocess
@@ -36,6 +37,9 @@ CROP_MIN_PAD      = 150
 NEAR_HAND_DIST   = 120      # px – centre‑to‑centre to call it "in hand"
 CONF_NEAR_HAND   = 0.25     # accept weak box if it's near a hand
 CONF_SOLO_OBJECT = 0.4     # stricter when object crosses alone
+ALPHA           = 1.2      # contrast control (1.0-3.0)
+BETA            = 20       # brightness control (0-100)
+HELD_FRAMES     = 3        # frames near a hand before marking item as held
 
 # Sound file paths
 ADD_SOUND = "sounds/add_item.mp3"
@@ -56,7 +60,10 @@ app      = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet",
                     logger=False, engineio_logger=False)
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
 yolo_obj = YOLO("yolov8n.pt")
+yolo_obj.fuse()
+yolo_obj.to(device)
 mp_hands = mp.solutions.hands.Hands(max_num_hands=2, model_complexity=0,
                                     min_detection_confidence=0.5,
                                     min_tracking_confidence=0.5)
@@ -287,6 +294,10 @@ def digital_zoom(img, factor):
     h, w = img.shape[:2]; nw, nh = int(w/factor), int(h/factor)
     x1, y1 = (w-nw)//2, (h-nh)//2
     return cv2.resize(img[y1:y1+nh, x1:x1+nw], (w, h), cv2.INTER_LINEAR)
+
+def adjust_contrast_brightness(img, alpha, beta):
+    """Apply brightness/contrast adjustments."""
+    return cv2.convertScaleAbs(img, alpha=alpha, beta=beta)
 
 def hands_in_frame(bgr):
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
@@ -661,6 +672,17 @@ def update_item_side(tid,center,w,h,frame):
         tr["flag"]=True
         tr["processed"] = True
 
+def update_hold_status(hand_centres):
+    """Mark items as held when consistently near a hand."""
+    for iid, tr in item_tracks.items():
+        cx, cy = tr["center"]
+        near = any(math.hypot(cx-hx, cy-hy) <= NEAR_HAND_DIST for hx, hy in hand_centres)
+        if near:
+            tr["held_frames"] = tr.get("held_frames", 0) + 1
+        else:
+            tr["held_frames"] = 0
+        tr["held"] = tr["held_frames"] >= HELD_FRAMES
+
 # --------------------------- MAIN VIDEO LOOP -------------------------------
 def generate_frames():
     cap=cv2.VideoCapture(0)
@@ -672,6 +694,7 @@ def generate_frames():
         frame=cv2.flip(frame,1)                  # mirror
         # frame=cv2.resize(frame,(960,540))
         frame_zoom=digital_zoom(frame,ZOOM_FACTOR)
+        frame_zoom=adjust_contrast_brightness(frame_zoom, ALPHA, BETA)
         h,w=frame_zoom.shape[:2]
 
         # ----------------- 1. detect hands --------------------------------
@@ -762,7 +785,8 @@ def generate_frames():
             else:
                 iid=best; item_tracks[iid].update(center=(cx,cy),box=det["box"],lost=0)
             cur_i.add(iid); update_item_side(iid,(cx,cy),w,h,frame_zoom)
-            cv2.rectangle(frame_zoom,(int(x1),int(y1)),(int(x2),int(y2)),(255,0,0),2)
+            color = (0,165,255) if item_tracks[iid].get("held") else (255,0,0)
+            cv2.rectangle(frame_zoom,(int(x1),int(y1)),(int(x2),int(y2)),color,2)
 
         # purge lost item tracks and reset processed flag
         for iid in list(item_tracks):
@@ -772,10 +796,12 @@ def generate_frames():
                     item_tracks.pop(iid,None)
             else:
                 # Reset processed flag when item is no longer near hands
-                if not any(math.hypot(item_tracks[iid]["center"][0]-hx, 
-                                    item_tracks[iid]["center"][1]-hy) <= HAND_ITEM_DIST 
+                if not any(math.hypot(item_tracks[iid]["center"][0]-hx,
+                                    item_tracks[iid]["center"][1]-hy) <= HAND_ITEM_DIST
                           for (hx,hy) in hand_centres):
                     item_tracks[iid]["processed"] = False
+
+        update_hold_status(hand_centres)
 
         # draw boundary
         pts=[(x,int(parabola_y(x,w,h))) for x in range(0,w,8)]
